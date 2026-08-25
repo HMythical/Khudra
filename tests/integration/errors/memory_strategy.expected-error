@@ -1,0 +1,3 @@
+the memory strategy is fixed at materialization and cannot be reassigned
+cannot free 'Fixed': it is garbage collected
+must be initialized with MemoryAllocationTypeObject.setStandard()

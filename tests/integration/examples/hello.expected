@@ -1,0 +1,3 @@
+1. Procedures -- the object has just been loaded into memory.
+2. Constructor -- field setup runs after the Procedures block.
+3. main -- Hello, Khudra.

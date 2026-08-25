@@ -1,0 +1,26 @@
+// The order things happen in when an object is loaded into memory.
+//
+// `main` is an ordinary member -- Khudra has no static context -- so running
+// this program materializes Hello first and then calls main on that instance.
+// The Procedures block fires before the constructor body, and both finish
+// before main can run.
+bring khu::stdlib;
+
+public class Hello {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    private string greeting = "Hello, Khudra.";
+
+    private Procedures {
+        io.printLine("1. Procedures -- the object has just been loaded into memory.");
+    }
+
+    public Hello() {
+        io.printLine("2. Constructor -- field setup runs after the Procedures block.");
+    }
+
+    func main() {
+        io.print("3. main -- ");
+        io.printLine(this.greeting);
+    }
+}

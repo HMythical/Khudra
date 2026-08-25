@@ -1,0 +1,4 @@
+no declaration of 'khuStdMath.add' matches (int32, int64)
+cannot convert int32 to int64
+cannot convert int64 to int32
+Khudra has no implicit widening or narrowing

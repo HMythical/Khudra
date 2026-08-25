@@ -1,0 +1,3 @@
+cannot free pinned object 'n': it is still held by 'this.head'
+pinned here; assigning a manual object into a managed slot
+clear 'this.head' before releasing the object

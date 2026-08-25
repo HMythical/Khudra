@@ -1,0 +1,24 @@
+// Object-level visibility: a private member is unreachable from any other
+// loaded object, including another instance of the same class.
+bring khu::stdlib;
+
+public class Secret {
+    private int32 hidden = 0;
+    public int32 shown = 0;
+
+    func copyFrom(Secret other) {
+        this.hidden = other.hidden;
+    }
+}
+
+public class Peeker {
+    func read(Secret s) -> int32 {
+        return s.hidden;
+    }
+
+    func write(Secret s) {
+        s.hidden = 1;
+    }
+
+    func main() { }
+}

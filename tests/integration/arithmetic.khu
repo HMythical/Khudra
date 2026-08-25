@@ -1,0 +1,27 @@
+// Width-specific arithmetic, wrapping overflow, and explicit conversion.
+bring khu::stdlib;
+
+public class Arithmetic {
+    func main() {
+        io.printLine(khuStdMath.add(20, 22));
+        io.printLine(khuStdMath.subtract(10, 25));
+        io.printLine(khuStdMath.multiply(6, 7));
+        io.printLine(khuStdMath.divide(45, 6));
+        io.printLine(khuStdMath.remainder(45, 7));
+
+        // Overflow wraps.
+        uint8 full = 255;
+        io.printLine(khuStdMath.add(full, 1));
+        int8 top = 127;
+        io.printLine(khuStdMath.add(top, 1));
+
+        // Widths never mix on their own.
+        int32 narrow = -5;
+        int64 widened = khuStdMath.convertTo(int64, narrow);
+        io.printLine(khuStdMath.multiply(widened, 1000000000));
+
+        dfloat ratio = khuStdMath.divide(7.0, 2.0);
+        io.printLine(ratio);
+        io.printLine(khuStdMath.convertTo(int32, ratio));
+    }
+}

@@ -1,0 +1,77 @@
+// khuStdMath -- arithmetic, one declaration per width.
+//
+// Khudra has no implicit widening or narrowing, so an operation is only defined
+// when both operands already share a type. That is why this file is a matrix
+// rather than a handful of generic signatures: the checker resolves the call by
+// the operand types, and a mixed-width call has no match by construction.
+//
+// Every declaration below lowers to a single bytecode instruction; none of them
+// is a real call at run time.
+//
+// `convertTo(<type>, <expr>)` is the one operation that cannot be declared
+// here: its first argument is a *type*, which Khudra has no way to write as a
+// parameter. It is a compiler intrinsic, lowers to the `convert` instruction,
+// and is the only sanctioned way to move a value between widths:
+//
+//     int64 wide = khuStdMath.convertTo(int64, narrow);
+
+public namespace khuStdMath {
+
+    // a + b
+    native func add(int8 a, int8 b) -> int8;
+    native func add(int16 a, int16 b) -> int16;
+    native func add(int32 a, int32 b) -> int32;
+    native func add(int64 a, int64 b) -> int64;
+    native func add(uint8 a, uint8 b) -> uint8;
+    native func add(uint16 a, uint16 b) -> uint16;
+    native func add(uint32 a, uint32 b) -> uint32;
+    native func add(uint64 a, uint64 b) -> uint64;
+    native func add(float a, float b) -> float;
+    native func add(dfloat a, dfloat b) -> dfloat;
+
+    // a - b
+    native func subtract(int8 a, int8 b) -> int8;
+    native func subtract(int16 a, int16 b) -> int16;
+    native func subtract(int32 a, int32 b) -> int32;
+    native func subtract(int64 a, int64 b) -> int64;
+    native func subtract(uint8 a, uint8 b) -> uint8;
+    native func subtract(uint16 a, uint16 b) -> uint16;
+    native func subtract(uint32 a, uint32 b) -> uint32;
+    native func subtract(uint64 a, uint64 b) -> uint64;
+    native func subtract(float a, float b) -> float;
+    native func subtract(dfloat a, dfloat b) -> dfloat;
+
+    // a * b
+    native func multiply(int8 a, int8 b) -> int8;
+    native func multiply(int16 a, int16 b) -> int16;
+    native func multiply(int32 a, int32 b) -> int32;
+    native func multiply(int64 a, int64 b) -> int64;
+    native func multiply(uint8 a, uint8 b) -> uint8;
+    native func multiply(uint16 a, uint16 b) -> uint16;
+    native func multiply(uint32 a, uint32 b) -> uint32;
+    native func multiply(uint64 a, uint64 b) -> uint64;
+    native func multiply(float a, float b) -> float;
+    native func multiply(dfloat a, dfloat b) -> dfloat;
+
+    // a / b, truncating toward zero for integers
+    native func divide(int8 a, int8 b) -> int8;
+    native func divide(int16 a, int16 b) -> int16;
+    native func divide(int32 a, int32 b) -> int32;
+    native func divide(int64 a, int64 b) -> int64;
+    native func divide(uint8 a, uint8 b) -> uint8;
+    native func divide(uint16 a, uint16 b) -> uint16;
+    native func divide(uint32 a, uint32 b) -> uint32;
+    native func divide(uint64 a, uint64 b) -> uint64;
+    native func divide(float a, float b) -> float;
+    native func divide(dfloat a, dfloat b) -> dfloat;
+
+    // a %% b. Integers only: the sign follows the dividend.
+    native func remainder(int8 a, int8 b) -> int8;
+    native func remainder(int16 a, int16 b) -> int16;
+    native func remainder(int32 a, int32 b) -> int32;
+    native func remainder(int64 a, int64 b) -> int64;
+    native func remainder(uint8 a, uint8 b) -> uint8;
+    native func remainder(uint16 a, uint16 b) -> uint16;
+    native func remainder(uint32 a, uint32 b) -> uint32;
+    native func remainder(uint64 a, uint64 b) -> uint64;
+}

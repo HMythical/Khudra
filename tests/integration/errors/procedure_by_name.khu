@@ -1,0 +1,17 @@
+// A Procedures block runs automatically. It is never something you call.
+bring khu::stdlib;
+
+public class Loaded {
+    private Procedures {
+        io.printLine("loaded");
+    }
+}
+
+public class Caller {
+    func direct() {
+        Loaded l = Loaded();
+        l.Procedures();
+    }
+
+    func main() { }
+}
