@@ -1,0 +1,38 @@
+name: CI - Linux
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'src/**'
+      - 'utils/**'
+      - 'tests/**'
+      - 'examples/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/ci-linux.yml'
+  pull_request:
+    branches: [ dev ]
+    paths:
+      - 'src/**'
+      - 'utils/**'
+      - 'tests/**'
+      - 'examples/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/ci-linux.yml'
+
+jobs:
+  build:
+    name: Build & Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure (Debug)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
