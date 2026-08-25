@@ -71,6 +71,8 @@ enable_testing()
 file(GLOB_RECURSE KHU_UNIT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/unit/*.cpp")
 add_executable(khudra_unit_tests tests/test_main.cpp ${KHU_UNIT_TEST_SOURCES})
 target_include_directories(khudra_unit_tests PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+# Tests read fixtures (example.khu, tests/integration/) from the source tree.
+target_compile_definitions(khudra_unit_tests PRIVATE KHU_PROJECT_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(khudra_unit_tests PRIVATE khu_frontend khu_runtime_c ${KHU_VM_TARGET})
 
 add_test(NAME unit COMMAND khudra_unit_tests)
