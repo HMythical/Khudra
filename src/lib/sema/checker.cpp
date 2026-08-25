@@ -44,8 +44,8 @@ Program* Checker::check(ast::CompilationUnit& unit) {
     resolve_strategies();
     build_layouts();
     validate_materialization_signatures();
-    check_bodies();
     resolve_entry_point(unit);
+    check_bodies();
     return program_;
 }
 

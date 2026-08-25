@@ -153,6 +153,7 @@ void Checker::check_method_body(MethodSymbol& method) {
     for (VarSymbol* param : method.params) declare_variable(param, param->loc);
     if (method.decl && method.decl->body) check_block(method.decl->body, false);
     pop_scope();
+    method.frame_size = next_frame_index_;
 
     bool wants_value = method.return_type && !method.return_type->is_void() &&
                        !method.return_type->is_error();
@@ -178,6 +179,7 @@ void Checker::check_procedures_body(ProcedureSymbol& procedures) {
     for (VarSymbol* param : procedures.params) declare_variable(param, param->loc);
     if (procedures.decl && procedures.decl->body) check_block(procedures.decl->body, false);
     pop_scope();
+    procedures.frame_size = next_frame_index_;
 
     current_procedure_ = nullptr;
 }

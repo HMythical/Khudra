@@ -13,6 +13,7 @@
 #include "diag/diagnostic.h"
 #include "diag/source_manager.h"
 #include "lexer/token.h"
+#include "bytecode/module.h"
 #include "parser/ast.h"
 #include "sema/checker.h"
 #include "sema/symbol.h"
@@ -40,6 +41,10 @@ public:
     // Parses and runs semantic analysis. Returns the program symbol table, or
     // nullptr when parsing failed outright.
     sema::Program* analyze(std::uint32_t file_id);
+
+    // Parses, checks and emits bytecode into `out`. Returns false when any
+    // stage reported an error.
+    bool compile(std::uint32_t file_id, bytecode::Module& out);
 
     sema::TypeContext& types() { return types_; }
     ast::CompilationUnit* unit() { return unit_; }

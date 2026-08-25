@@ -71,6 +71,9 @@ struct MethodSymbol {
 
     std::uint32_t vtable_slot = 0;
     std::uint32_t method_id = 0;
+    // Frame slots needed at run time: parameters plus every local. Filled by
+    // the checker as it declares them.
+    std::uint32_t frame_size = 0;
     // Builtins have no body; the VM binds them by native id (Phase 7).
     bool is_native = false;
     std::uint32_t native_id = 0;
@@ -93,6 +96,8 @@ struct ProcedureSymbol {
     util::Array<VarSymbol*> params;
     ClassSymbol* owner = nullptr;
     const ast::ProceduresDecl* decl = nullptr;
+    std::uint32_t method_id = 0;
+    std::uint32_t frame_size = 0;
 };
 
 struct ClassSymbol {

@@ -224,6 +224,10 @@ Both forms are supported and `khudra run` dispatches accordingly:
 2. **root-class materialization** -- when no `main` exists, the first top-level
    class is materialized and its `Procedures` block fires.
 
+`main` runs **without a receiver**, so declaring one does not also materialize
+its own class -- the two forms stay distinct. A program that wants an instance
+materializes it explicitly.
+
 ## 9. Built-in namespaces
 
 `khuStdMath`, `io` and `khu` are namespaces, not classes: they are never

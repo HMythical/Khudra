@@ -14,12 +14,16 @@
 #include <string>
 #include <string_view>
 
+#include "bytecode/disassembler.h"
+#include "bytecode/module.h"
 #include "compiler.h"
 #include "diag/diagnostic.h"
 #include "diag/source_manager.h"
 #include "lexer/token.h"
 #include "parser/pretty_printer.h"
 #include "util/array.h"
+#include "util/file.h"
+#include "vm/vm.h"
 
 namespace {
 
@@ -138,7 +142,39 @@ void dump_tokens(const khu::Compiler& compiler, const khu::util::Array<khu::lexe
     }
 }
 
+// `khudra compile hello.khu` writes hello.kbc next to the source.
+std::string default_output_path(const std::string& input) {
+    std::size_t dot = input.find_last_of('.');
+    std::size_t slash = input.find_last_of('/');
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+        return input.substr(0, dot) + ".kbc";
+    }
+    return input + ".kbc";
+}
+
+// Disassembling an existing image never touches the front end.
+int disassemble_image(const std::string& path, const std::string& bytes) {
+    khu::bytecode::Module module;
+    std::string error;
+    if (!khu::bytecode::deserialize(bytes, module, error)) {
+        std::fprintf(stderr, "khudra: %s: %s\n", path.c_str(), error.c_str());
+        return 1;
+    }
+    std::string text = khu::bytecode::disassemble(module);
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    return 0;
+}
+
 int run_stage(const Options& options) {
+    // A .kbc image is loaded directly; anything else goes through the compiler.
+    if (options.command == Command::Disasm) {
+        std::string bytes;
+        if (khu::util::read_file(options.input, bytes) == khu::util::FileError::None &&
+            bytes.size() >= 4 && std::memcmp(bytes.data(), khu::bytecode::kMagic, 4) == 0) {
+            return disassemble_image(options.input, bytes);
+        }
+    }
+
     khu::Compiler compiler;
 
     std::string load_error;
@@ -167,22 +203,50 @@ int run_stage(const Options& options) {
         return 0;
     }
 
-    compiler.analyze(file_id);
+    if (options.command == Command::Check) {
+        compiler.analyze(file_id);
+        compiler.diagnostics().print(stderr);
+        return compiler.diagnostics().has_errors() ? 1 : 0;
+    }
+
+    khu::bytecode::Module module;
+    bool built = compiler.compile(file_id, module);
     compiler.diagnostics().print(stderr);
-    if (compiler.diagnostics().has_errors()) return 1;
+    if (!built) return 1;
 
-    // `check` stops after semantic analysis by design.
-    if (options.command == Command::Check) return 0;
+    switch (options.command) {
+        case Command::Disasm: {
+            std::string text = khu::bytecode::disassemble(module);
+            std::fwrite(text.data(), 1, text.size(), stdout);
+            return 0;
+        }
 
-    // The stages behind the front end arrive in later phases. The report still
-    // carries a real file:line:col.
-    khu::diag::SourceLocation start{file_id, 1, 1, 0};
-    khu::diag::DiagnosticEngine& diagnostics = compiler.diagnostics();
-    diagnostics.error(start, "'" + options.command_name + "' is not implemented yet")
-        .note(start, "the source passed semantic analysis; bytecode and the VM land in Phase 3 "
-                     "(see KHU-PLAN.md)");
+        case Command::Compile:
+        case Command::EmitBc: {
+            std::string path = options.output.empty() ? default_output_path(options.input)
+                                                      : options.output;
+            std::string bytes = khu::bytecode::serialize(module);
+            if (!khu::util::write_file(path, bytes)) {
+                std::fprintf(stderr, "khudra: cannot write '%s'\n", path.c_str());
+                return 1;
+            }
+            return 0;
+        }
 
-    diagnostics.print(stderr);
+        case Command::Run: {
+            khu::vm::Vm vm(module);
+            if (!vm.run()) {
+                std::fwrite(vm.error().data(), 1, vm.error().size(), stderr);
+                return 1;
+            }
+            return 0;
+        }
+
+        default:
+            break;
+    }
+
+    std::fprintf(stderr, "khudra: '%s' is not implemented yet\n", options.command_name.c_str());
     return 1;
 }
 

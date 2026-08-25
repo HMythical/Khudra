@@ -374,10 +374,11 @@ MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
         for (std::size_t i = 0; i < actual.size(); ++i) {
             const Type* wanted = candidate->params[i]->type;
             if (exact ? (actual[i] == wanted) : assignable(actual[i], wanted)) continue;
+            // In the loose round a numeric literal has not committed to a
+            // width yet, so it fits any numeric parameter. In the exact round
+            // it has already taken its natural type and must match outright --
+            // otherwise every width would look equally good.
             if (!exact && is_numeric_literal(call.args[i]) && wanted && wanted->is_numeric()) {
-                continue;
-            }
-            if (exact && is_numeric_literal(call.args[i]) && wanted && wanted->is_numeric()) {
                 continue;
             }
             return false;

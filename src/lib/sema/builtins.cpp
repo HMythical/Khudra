@@ -7,7 +7,6 @@ struct Registrar {
     Program& program;
     TypeContext& types;
     util::Arena& arena;
-    std::uint32_t next_native = static_cast<std::uint32_t>(Native::First);
 
     ClassSymbol* make_namespace(std::string_view name) {
         auto* symbol = arena.create<ClassSymbol>();
@@ -48,12 +47,13 @@ struct Registrar {
     }
 
     // A same-width binary operation: add(int32, int32) -> int32.
-    void declare_binary(ClassSymbol* owner, std::string_view name, const Type* type) {
+    void declare_binary(ClassSymbol* owner, std::string_view name, Intrinsic which,
+                        const Type* type) {
         MethodSymbol* method = declare(owner, name, type);
         method->params.push(make_param("a", type));
         method->params.push(make_param("b", type));
-        method->is_native = true;
-        method->native_id = 0;  // lowered to a bytecode arithmetic op, not a call
+        method->is_intrinsic = true;
+        method->intrinsic_id = static_cast<std::uint32_t>(which);
     }
 
     void declare_native(ClassSymbol* owner, std::string_view name, const Type* return_type,
@@ -62,14 +62,13 @@ struct Registrar {
         if (argument) method->params.push(make_param("value", argument));
         method->is_native = true;
         method->native_id = static_cast<std::uint32_t>(native);
-        next_native = method->native_id + 1;
     }
 };
 
 }  // namespace
 
 void install_builtins(Program& program, TypeContext& types, util::Arena& arena) {
-    Registrar registrar{program, types, arena, static_cast<std::uint32_t>(Native::First)};
+    Registrar registrar{program, types, arena};
 
     // Every numeric type, in the order the checker reports them.
     const Type* numeric[] = {
@@ -84,11 +83,13 @@ void install_builtins(Program& program, TypeContext& types, util::Arena& arena) 
     // is a type error that names convertTo as the way out.
     ClassSymbol* math = registrar.make_namespace(kMathNamespace);
     for (const Type* type : numeric) {
-        registrar.declare_binary(math, "add", type);
-        registrar.declare_binary(math, "subtract", type);
-        registrar.declare_binary(math, "multiply", type);
-        registrar.declare_binary(math, "divide", type);
-        if (type->is_integer()) registrar.declare_binary(math, "remainder", type);
+        registrar.declare_binary(math, "add", Intrinsic::Add, type);
+        registrar.declare_binary(math, "subtract", Intrinsic::Subtract, type);
+        registrar.declare_binary(math, "multiply", Intrinsic::Multiply, type);
+        registrar.declare_binary(math, "divide", Intrinsic::Divide, type);
+        if (type->is_integer()) {
+            registrar.declare_binary(math, "remainder", Intrinsic::Remainder, type);
+        }
     }
 
     // convertTo is an intrinsic: its first argument is a type, and it lowers to

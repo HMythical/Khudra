@@ -81,6 +81,21 @@ add_test(NAME unit COMMAND khudra_unit_tests)
 # not implemented yet -- Phase 0 acceptance.
 add_test(NAME cli_help COMMAND khudra help)
 
+# Golden-file integration tests: each tests/integration/<name>.khu is run and
+# its stdout compared to <name>.expected.
+file(GLOB KHU_GOLDEN_TESTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/integration/*.khu")
+foreach(golden ${KHU_GOLDEN_TESTS})
+    get_filename_component(golden_name "${golden}" NAME_WE)
+    get_filename_component(golden_dir "${golden}" DIRECTORY)
+    add_test(
+        NAME golden_${golden_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${golden}
+            -DEXPECTED=${golden_dir}/${golden_name}.expected
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
+endforeach()
+
 # Every sample program must pass semantic analysis.
 file(GLOB KHU_EXAMPLES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/examples/*.khu")
 foreach(example ${KHU_EXAMPLES})

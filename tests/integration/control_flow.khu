@@ -1,0 +1,48 @@
+// Calls, recursion, loops, branches and short-circuit logic.
+bring khu::stdlib;
+
+public class Flow {
+    func gcd(int32 a, int32 b) -> int32 {
+        while (b != 0) {
+            int32 next = a % b;
+            a = b;
+            b = next;
+        }
+        return a;
+    }
+
+    func power(int64 base, int32 exponent) -> int64 {
+        if (exponent == 0) {
+            return 1;
+        }
+        return khuStdMath.multiply(
+            base, this.power(base, khuStdMath.subtract(exponent, 1)));
+    }
+
+    method sign(int32 value) -> string {
+        if (value < 0) {
+            return "negative";
+        } else if (value > 0) {
+            return "positive";
+        }
+        return "zero";
+    }
+
+    func loud() -> bool {
+        io.printLine("side effect");
+        return true;
+    }
+
+    func main() {
+        io.printLine(this.gcd(1071, 462));
+        io.printLine(this.power(2, 20));
+        io.printLine(this.sign(-4));
+        io.printLine(this.sign(0));
+        io.printLine(this.sign(9));
+
+        // The right operand of a short-circuit never runs when the left
+        // already decides the answer.
+        io.printLine(false && this.loud());
+        io.printLine(true || this.loud());
+    }
+}

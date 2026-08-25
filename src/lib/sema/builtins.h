@@ -9,6 +9,7 @@
 
 #include <cstdint>
 
+#include "bytecode/native.h"
 #include "sema/symbol.h"
 #include "sema/type.h"
 #include "util/arena.h"
@@ -19,16 +20,18 @@ namespace khu::sema {
 enum class Intrinsic : std::uint32_t {
     None = 0,
     ConvertTo,  // khuStdMath.convertTo(<type>, expr)
+    // Width-specific arithmetic. These lower to a single bytecode instruction
+    // rather than a call, which is why they are intrinsics and not natives.
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
 };
 
-// Runtime-provided operations, bound by id in the VM.
-enum class Native : std::uint32_t {
-    None = 0,
-    Print,
-    PrintLine,
-    ReadLine,
-    First = Print,
-};
+// Runtime-provided operations. The ids are the VM's, not ours -- see
+// bytecode/native.h -- so an image written here loads there.
+using Native = bytecode::NativeId;
 
 // Registers the built-in namespaces into `program`. Safe to call once per
 // compilation.
