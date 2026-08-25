@@ -1,9 +1,5 @@
 # Khudra Memory Model
 
-Status: implemented. Written as a draft in Phase 0, before the code that
-depends on it; the Phase 2 checker and the Phase 5 runtime are validated
-against it.
-
 Khudra's second core feature is that *memory management is chosen through an
 object*. A class declares its strategy as an ordinary field, and an allocation
 site may override it. There is no global GC-vs-manual switch.

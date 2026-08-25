@@ -126,9 +126,39 @@ foreach(golden ${KHU_GOLDEN_TESTS})
             -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
 endforeach()
 
-# Every sample program must pass semantic analysis.
+# Expected-failure tests: each tests/integration/errors/<name>.khu must be
+# rejected, mentioning every line of <name>.expected-error.
+file(GLOB KHU_ERROR_TESTS CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/tests/integration/errors/*.khu")
+foreach(bad ${KHU_ERROR_TESTS})
+    get_filename_component(bad_name "${bad}" NAME_WE)
+    get_filename_component(bad_dir "${bad}" DIRECTORY)
+    add_test(
+        NAME rejects_${bad_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${bad}
+            -DEXPECTED=${bad_dir}/${bad_name}.expected-error
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_error.cmake)
+endforeach()
+
+# Every sample program must pass semantic analysis, and -- where an expected
+# output is recorded next to it -- produce exactly that output. The programs
+# live in examples/ so they stay readable on their own; only the goldens live
+# under tests/.
 file(GLOB KHU_EXAMPLES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/examples/*.khu")
 foreach(example ${KHU_EXAMPLES})
     get_filename_component(example_name "${example}" NAME_WE)
     add_test(NAME check_${example_name} COMMAND khudra check "${example}")
+
+    set(example_golden "${CMAKE_SOURCE_DIR}/tests/integration/examples/${example_name}.expected")
+    if(EXISTS "${example_golden}")
+        add_test(
+            NAME golden_example_${example_name}
+            COMMAND ${CMAKE_COMMAND}
+                -DKHUDRA=$<TARGET_FILE:khudra>
+                -DSOURCE=${example}
+                -DEXPECTED=${example_golden}
+                -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
+    endif()
 endforeach()

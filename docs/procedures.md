@@ -1,9 +1,4 @@
 # Procedures
-
-Status: implemented. Written as a draft in Phase 0, before the code that
-depends on it; `utils/proc_engine.c` implements this document and
-`tests/unit/test_procedures.cpp` checks it.
-
 A **Procedure** is Khudra's third core feature: a named block in a class body
 that executes *immediately when an object instance is materialized* -- when it is
 loaded into memory -- instead of waiting to be called by another object.

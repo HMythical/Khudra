@@ -1,0 +1,2 @@
+cannot read private field 'Secret.hidden' from another object
+cannot modify private field 'Secret.hidden' from another object

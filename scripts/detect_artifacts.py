@@ -7,6 +7,11 @@ import sys
 from pathlib import Path
 
 FORBIDDEN_PATTERNS = [
+    # Editor scratch files: a stray .swp has been committed before.
+    "*.swp",
+    "*.swo",
+    "*~",
+    ".DS_Store",
     "*.o",
     "*.obj",
     "*.a",

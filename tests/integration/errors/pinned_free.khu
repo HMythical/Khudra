@@ -1,0 +1,21 @@
+// A manual object held by a managed slot is pinned: releasing it while the slot
+// still refers to it would leave the collector tracing a dangling pointer.
+bring khu::stdlib;
+
+public class Node {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();
+    public int32 value = 0;
+}
+
+public class List {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+    public Node head = null;
+
+    func go() {
+        Node n = Node();
+        this.head = n;
+        free(n);
+    }
+
+    func main() { }
+}

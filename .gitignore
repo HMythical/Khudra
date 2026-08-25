@@ -7,6 +7,9 @@ build/cmake_install.cmake
 build/Makefile
 build/*.cmake
 build/cmake-build-*/
+# Out-of-source build trees (CI uses build-asan/).
+build-*/
+cmake-build-*/
 build/Testing/
 build/generated/
 build/khudra
@@ -25,3 +28,9 @@ build/khudra[._]*
 
 # Khudra bytecode
 *.kbc
+
+# Editor scratch files
+*.swp
+*.swo
+*~
+.DS_Store
