@@ -28,12 +28,20 @@ Value default_value_for(TypeTag tag) {
 
 Heap::~Heap() { destroy_all(); }
 
+ManualArena& Heap::arena_for(const RuntimeClass& type) {
+    if (arenas_.size() <= type.class_id) arenas_.resize(type.class_id + 1, nullptr);
+    ManualArena*& arena = arenas_[type.class_id];
+    if (!arena) arena = new ManualArena(type.allocation_size);
+    return *arena;
+}
+
 Object* Heap::allocate(RuntimeClass& type, bool manual) {
     std::size_t bytes = type.allocation_size;
 
-    // Manual memory comes from the C runtime so its live-byte accounting covers
-    // every manual object in the process.
-    void* storage = manual ? khu_manual_alloc(bytes) : std::calloc(1, bytes);
+    // Manual objects come from their class's arena, which in turn takes blocks
+    // from the C runtime -- so its live-byte accounting still covers every
+    // manual byte in the process.
+    void* storage = manual ? arena_for(type).allocate() : std::calloc(1, bytes);
     if (!storage) return nullptr;
 
     auto* object = static_cast<Object*>(storage);
@@ -79,12 +87,38 @@ void Heap::unlink(Object*& head, Object* object) {
     }
 }
 
+bool Heap::is_tracked_manual(const Object* object) const {
+    for (const Object* current = manual_head_; current; current = current->header.gc_link) {
+        if (current == object) return true;
+    }
+    return false;
+}
+
 bool Heap::free_manual(Object* object) {
     if (!object || !object->is_manual()) return false;
+    auto* type = static_cast<RuntimeClass*>(object->header.vtable);
+    if (!type) return false;
+    // Returning an already-released chunk to the arena would corrupt its free
+    // list, so a pointer that is not on the live list is refused.
+    if (!is_tracked_manual(object)) return false;
+
     unlink(manual_head_, object);
     --manual_count_;
-    khu_manual_free(object);
+    arena_for(*type).release(object);
     return true;
+}
+
+void Heap::destroy_managed(Object* object) {
+    if (!object) return;
+    if (managed_bytes_ >= object->header.size) managed_bytes_ -= object->header.size;
+    if (managed_count_ > 0) --managed_count_;
+    std::free(object);
+}
+
+void Heap::adopt_managed_list(Object* head, std::size_t count, std::size_t bytes) {
+    managed_head_ = head;
+    managed_count_ = count;
+    managed_bytes_ = bytes;
 }
 
 void Heap::destroy_all() {
@@ -98,14 +132,12 @@ void Heap::destroy_all() {
     managed_count_ = 0;
     managed_bytes_ = 0;
 
-    current = manual_head_;
-    while (current) {
-        Object* next = current->header.gc_link;
-        khu_manual_free(current);
-        current = next;
-    }
+    // Manual chunks belong to their arenas; dropping the arenas releases every
+    // block back to the C runtime in one go.
     manual_head_ = nullptr;
     manual_count_ = 0;
+    for (ManualArena* arena : arenas_) delete arena;
+    arenas_.clear();
 }
 
 }  // namespace khu::vm

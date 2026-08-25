@@ -1,19 +1,21 @@
 // Object allocation.
 //
-// Phase 4 gives objects a real home: a header-stamped block per instance, kept
-// on an intrusive list through the header's `gc_link`. Managed and manual
-// objects are tracked separately because the collector only ever walks one of
-// them and manual memory comes from the C runtime (utils/alloc.c).
+// A header-stamped block per instance, kept on an intrusive list through the
+// header's `gc_link`. Managed and manual objects are tracked separately
+// because the collector only ever walks one of them.
 //
-// Phase 5 replaces the managed side's "free everything at shutdown" with
-// mark-sweep and the manual side with per-class arenas; the interface here is
-// what both plug into.
+// Managed objects are reclaimed by the mark-sweep collector in src/vm/gc/;
+// manual objects come from a per-class arena in src/vm/manual/ and are released
+// explicitly by `free` / `dispose`. Arena blocks come from the C runtime
+// (utils/alloc.c), so its live-byte accounting covers every manual byte.
 #ifndef KHU_VM_HEAP_H
 #define KHU_VM_HEAP_H
 
 #include <cstddef>
 #include <cstdint>
 
+#include "manual/arena.h"
+#include "util/array.h"
 #include "vm/class_table.h"
 #include "vm/object.h"
 #include "vm/value.h"
@@ -38,6 +40,17 @@ public:
     // not tracked here.
     bool free_manual(Object* object);
 
+    // True when `object` is on the live manual list. A released chunk is not,
+    // which is how a double release is caught before its zeroed header is read.
+    bool is_tracked_manual(const Object* object) const;
+
+    // Frees one managed object without touching the live list. The collector
+    // rebuilds the list as it sweeps, so unlinking per object would be wasted
+    // work.
+    void destroy_managed(Object* object);
+    // Installs the survivor list the collector built.
+    void adopt_managed_list(Object* head, std::size_t count, std::size_t bytes);
+
     // Frees everything. Called at VM shutdown.
     void destroy_all();
 
@@ -51,7 +64,10 @@ public:
 
 private:
     void unlink(Object*& head, Object* object);
+    ManualArena& arena_for(const RuntimeClass& type);
 
+    // One arena per class id, created on first use.
+    util::Array<ManualArena*> arenas_;
     Object* managed_head_ = nullptr;
     Object* manual_head_ = nullptr;
     std::size_t managed_count_ = 0;

@@ -24,6 +24,8 @@ struct RuntimeClass {
 
     // One tagged Value per field slot; inherited slots come first.
     std::uint32_t slot_count = 0;
+    // Slot names, resolved once so diagnostics do not go back to the pool.
+    util::Array<std::string_view> field_names;
     std::uint32_t allocation_size = 0;
     bool manual = false;
 

@@ -45,8 +45,51 @@ bool Vm::prepare() {
     if (prepared_) return true;
     std::string error;
     if (!classes_.load(module_, error)) return trap("cannot load the class table: " + error);
+    collector_.set_root_source(this);
     prepared_ = true;
     return true;
+}
+
+void Vm::enumerate_roots(Collector& collector) {
+    for (const Value& value : stack_) collector.mark_value(value);
+    for (Frame* frame : frames_) {
+        if (!frame) continue;
+        collector.mark_value(frame->receiver);
+        for (const Value& local : frame->locals) collector.mark_value(local);
+    }
+    for (const Value& value : native_roots_) collector.mark_value(value);
+}
+
+// Allocation is the only thing that triggers a cycle, and it happens with every
+// root reachable: the operand stack, the frames, and native_roots_ for anything
+// a half-finished materialization is holding.
+Object* Vm::allocate(RuntimeClass& type, bool manual) {
+    if (!manual && collector_.should_collect()) collector_.collect();
+    Object* object = heap_.allocate(type, manual);
+    if (!object && !manual) {
+        // Out of memory is worth one more cycle before giving up.
+        collector_.collect();
+        object = heap_.allocate(type, manual);
+    }
+    return object;
+}
+
+// docs/memory-model.md, section 4.2: assigning a manual object into a managed
+// slot increments its pin count; overwriting or dropping that slot decrements.
+void Vm::write_barrier(Object* owner, const RuntimeClass& type, std::uint32_t slot,
+                       const Value& incoming) {
+    if (!owner->is_managed()) return;  // manual -> manual is plain ownership
+    const bytecode::FieldEntry* field = type.field(slot);
+    if (!field || field->ref_kind != bytecode::kRefManual) return;
+
+    Value& current = owner->slots()[slot];
+    if (current.tag == TypeTag::Ref && current.as_ref && current.as_ref->is_manual() &&
+        current.as_ref->header.pin_count > 0) {
+        --current.as_ref->header.pin_count;
+    }
+    if (incoming.tag == TypeTag::Ref && incoming.as_ref && incoming.as_ref->is_manual()) {
+        ++incoming.as_ref->header.pin_count;
+    }
 }
 
 Vm::~Vm() {
@@ -506,8 +549,7 @@ bool Vm::execute(Frame& frame, Value& result) {
                 if (!type || slot >= type->slot_count) {
                     return trap("field slot " + std::to_string(slot) + " is out of range");
                 }
-                // A managed slot taking a manual reference is where the pin
-                // write barrier goes; Phase 5 attaches it here.
+                write_barrier(object, *type, slot, value);
                 object->slots()[slot] = value;
                 break;
             }
@@ -526,7 +568,7 @@ bool Vm::execute(Frame& frame, Value& result) {
                 std::uint16_t class_id = read_u16(frame);
                 RuntimeClass* type = classes_.at(class_id);
                 if (!type) return trap("unknown class id " + std::to_string(class_id));
-                Object* object = heap_.allocate(*type, op == Op::ManualAlloc);
+                Object* object = allocate(*type, op == Op::ManualAlloc);
                 if (!object) return trap("out of memory allocating '" + std::string(type->name) +
                                          "'");
                 push(Value::make_ref(object));
@@ -741,14 +783,31 @@ bool Vm::materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Va
                   (strategy == bytecode::StrategyByte::ClassDefault && type->manual);
 
     // The allocation-site arguments are on the stack; both the Procedures block
-    // and the constructor receive the same ones.
+    // and the constructor receive the same ones. They come off the stack here,
+    // so they have to be roots for as long as this materialization runs.
+    std::size_t root_mark = native_roots_.size();
     util::Array<Value> args;
-    for (std::uint8_t i = 0; i < type->materialize_argc; ++i) args.push(pop());
+    for (std::uint8_t i = 0; i < type->materialize_argc; ++i) {
+        args.push(pop());
+        native_roots_.push(args.back());
+    }
 
     // 1. allocate per strategy, 2. link the object (header + defaults)
-    Object* object = heap_.allocate(*type, manual);
-    if (!object) return trap("out of memory materializing '" + std::string(type->name) + "'");
+    Object* object = allocate(*type, manual);
+    if (!object) {
+        native_roots_.resize(root_mark);
+        return trap("out of memory materializing '" + std::string(type->name) + "'");
+    }
     Value reference = Value::make_ref(object);
+    // Nothing on the interpreter stack refers to the new object yet, so a
+    // collection triggered by a nested allocation would reclaim it.
+    native_roots_.push(reference);
+
+    struct RootScope {
+        util::Array<Value>& roots;
+        std::size_t mark;
+        ~RootScope() { roots.resize(mark); }
+    } scope{native_roots_, root_mark};
 
     util::Array<RuntimeClass*> chain;
     collect_chain(*type, chain);
@@ -795,13 +854,30 @@ bool Vm::release_manual(Value target) {
     auto* type = static_cast<RuntimeClass*>(object->header.vtable);
     std::string name = type ? std::string(type->name) : std::string("object");
 
-    if (!object->is_manual()) {
+    if (object->is_managed()) {
         return trap("cannot free '" + name + "': it is garbage collected");
     }
+    // A released chunk has been zeroed and returned to its arena, so its header
+    // says nothing useful. The live list is the authority.
+    if (!heap_.is_tracked_manual(object)) {
+        return trap("cannot free this object: it was already released");
+    }
     if (object->header.pin_count > 0) {
-        return trap("cannot free '" + name + "': it is pinned by " +
-                    std::to_string(object->header.pin_count) + " managed slot" +
-                    (object->header.pin_count == 1 ? "" : "s"));
+        // Name the slots that still hold it: a pin count alone does not tell
+        // the programmer what to clear.
+        util::Array<std::string> holders = collector_.find_holders(object);
+        std::string message = "cannot free '" + name + "': it is still held by ";
+        if (holders.empty()) {
+            message += std::to_string(object->header.pin_count) + " managed slot" +
+                       (object->header.pin_count == 1 ? "" : "s");
+        } else {
+            for (std::size_t i = 0; i < holders.size(); ++i) {
+                if (i != 0) message += ", ";
+                message += "'" + holders[i] + "'";
+            }
+        }
+        message += "; clear the reference before releasing the object";
+        return trap(message);
     }
     if (!heap_.free_manual(object)) {
         return trap("cannot free '" + name + "': it was already released");
