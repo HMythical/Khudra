@@ -14,8 +14,11 @@
 #include <string>
 #include <string_view>
 
+#include "compiler.h"
 #include "diag/diagnostic.h"
 #include "diag/source_manager.h"
+#include "lexer/token.h"
+#include "parser/pretty_printer.h"
 #include "util/array.h"
 
 namespace {
@@ -128,26 +131,53 @@ bool command_needs_input(Command command) {
     }
 }
 
+void dump_tokens(const khu::Compiler& compiler, const khu::util::Array<khu::lexer::Token>& tokens) {
+    for (const khu::lexer::Token& token : tokens) {
+        std::printf("%-24s %-16s %s\n", compiler.sources().format(token.loc).c_str(),
+                    khu::lexer::token_name(token.kind), std::string(token.text).c_str());
+    }
+}
+
 int run_stage(const Options& options) {
-    khu::diag::SourceManager sources;
-    khu::diag::DiagnosticEngine diagnostics(sources);
+    khu::Compiler compiler;
 
     std::string load_error;
-    std::uint32_t file_id = sources.load_file(options.input, load_error);
+    std::uint32_t file_id = compiler.add_file(options.input, load_error);
     if (file_id == khu::diag::kInvalidFileId) {
         std::fprintf(stderr, "khudra: cannot open '%s': %s\n", options.input.c_str(),
                      load_error.c_str());
         return 1;
     }
 
-    // Every stage that does not exist yet reports at the start of the file so
-    // the message still carries a real file:line:col.
-    khu::diag::SourceLocation start{file_id, 1, 1, 0};
-    diagnostics.error(start, "'" + options.command_name + "' is not implemented yet")
-        .note(start, "the Khudra front end lands in Phase 1 (see KHU-PLAN.md)");
+    if (options.dump_tokens) {
+        khu::util::Array<khu::lexer::Token> tokens = compiler.tokenize(file_id);
+        compiler.diagnostics().print(stderr);
+        if (compiler.diagnostics().has_errors()) return 1;
+        dump_tokens(compiler, tokens);
+        if (!options.dump_ast) return 0;
+    }
 
-    diagnostics.print(stderr);
-    return diagnostics.has_errors() ? 1 : 0;
+    khu::ast::CompilationUnit* unit = compiler.parse(file_id);
+    compiler.diagnostics().print(stderr);
+    if (compiler.diagnostics().has_errors()) return 1;
+
+    if (options.dump_ast) {
+        khu::parser::PrettyPrinter printer;
+        std::string text = printer.print(*unit);
+        std::fwrite(text.data(), 1, text.size(), stdout);
+        return 0;
+    }
+
+    // The front end is in place; the stages behind it arrive in later phases.
+    // The report still carries a real file:line:col.
+    khu::diag::SourceLocation start{file_id, 1, 1, 0};
+    compiler.diagnostics()
+        .error(start, "'" + options.command_name + "' is not implemented yet")
+        .note(start, "the source parsed cleanly; semantic analysis lands in Phase 2 "
+                     "(see KHU-PLAN.md)");
+
+    compiler.diagnostics().print(stderr);
+    return 1;
 }
 
 }  // namespace
