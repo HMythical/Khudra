@@ -8,6 +8,9 @@ const char* native_name(NativeId id) {
         case NativeId::Print: return "io.print";
         case NativeId::PrintLine: return "io.printLine";
         case NativeId::ReadLine: return "io.readLine";
+        case NativeId::StdlibLoadObject: return "khu.stdlibLoadObject";
+        case NativeId::GetType: return "khu.getType";
+        case NativeId::LoadRuntimeType: return "khu.LoadRuntimeType";
     }
     return "<native>";
 }

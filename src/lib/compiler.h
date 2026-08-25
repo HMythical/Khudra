@@ -38,9 +38,14 @@ public:
     // diagnostics().has_errors().
     ast::CompilationUnit* parse(std::uint32_t file_id);
 
-    // Parses and runs semantic analysis. Returns the program symbol table, or
-    // nullptr when parsing failed outright.
+    // Parses and runs semantic analysis over the user's file plus the embedded
+    // standard library. Returns the program symbol table, or nullptr when
+    // parsing failed outright.
     sema::Program* analyze(std::uint32_t file_id);
+
+    // Parses the embedded standard library once. Called by analyze(); exposed
+    // so a test can check it in isolation.
+    bool load_stdlib();
 
     // Parses, checks and emits bytecode into `out`. Returns false when any
     // stage reported an error.
@@ -61,6 +66,8 @@ private:
     util::Arena arena_;
     sema::TypeContext types_;
     ast::CompilationUnit* unit_ = nullptr;
+    util::Array<ast::CompilationUnit*> stdlib_units_;
+    bool stdlib_loaded_ = false;
 };
 
 }  // namespace khu

@@ -205,15 +205,17 @@ ast::CompilationUnit* Parser::parse_unit() {
             continue;
         }
 
-        if (!check(TokenKind::KwClass)) {
-            error_at(current(), "expected a class declaration at top level, found " +
+        bool is_namespace = check(TokenKind::KwNamespace);
+        if (!is_namespace && !check(TokenKind::KwClass)) {
+            error_at(current(), "expected a class or namespace declaration at top level, found " +
                                     describe(current()));
             // Skip the offending token so the loop makes progress.
             advance();
             continue;
         }
 
-        if (ast::ClassDecl* decl = parse_class(visibility, explicit_visibility, start)) {
+        if (ast::ClassDecl* decl =
+                parse_class(visibility, explicit_visibility, start, is_namespace)) {
             unit->classes.push(decl);
         }
     }
@@ -245,15 +247,17 @@ ast::ImportDecl* Parser::parse_import() {
 // ---------------------------------------------------------------------------
 
 ast::ClassDecl* Parser::parse_class(ast::Visibility visibility, bool explicit_visibility,
-                                    diag::SourceLocation start) {
-    advance();  // 'class'
+                                    diag::SourceLocation start, bool is_namespace) {
+    advance();  // 'class' or 'namespace'
 
     auto* decl = arena_.create<ast::ClassDecl>(start);
     decl->visibility = visibility;
     decl->explicit_visibility = explicit_visibility;
+    decl->is_namespace = is_namespace;
 
     if (!check(TokenKind::Identifier)) {
-        error_at(current(), "expected a class name, found " + describe(current()));
+        error_at(current(), std::string("expected a ") + (is_namespace ? "namespace" : "class") +
+                                " name, found " + describe(current()));
         synchronize_to_member();
         return nullptr;
     }
@@ -261,6 +265,9 @@ ast::ClassDecl* Parser::parse_class(ast::Visibility visibility, bool explicit_vi
     decl->name_loc = current().loc;
     advance();
 
+    if (is_namespace && check(TokenKind::KwExtends)) {
+        error_at(current(), "a namespace cannot extend anything");
+    }
     if (match(TokenKind::KwExtends)) {
         if (!check(TokenKind::Identifier)) {
             error_at(current(), "expected a base class name after 'extends', found " +
@@ -297,6 +304,9 @@ ast::Decl* Parser::parse_member(std::string_view class_name) {
         explicit_visibility = true;
     }
 
+    // `native` marks a member the toolchain implements; it has no body.
+    bool is_native = match(TokenKind::KwNative);
+
     // `func` is public by default, `method` is private by default; an explicit
     // modifier overrides that default (KHU-PLAN.md, Members).
     if (check(TokenKind::KwFunc) || check(TokenKind::KwMethod)) {
@@ -307,7 +317,14 @@ ast::Decl* Parser::parse_member(std::string_view class_name) {
             visibility = visibility_is_public ? ast::Visibility::Public : ast::Visibility::Private;
         }
         return parse_method(is_func ? ast::MethodForm::Func : ast::MethodForm::Method, visibility,
-                            explicit_visibility, start);
+                            explicit_visibility, is_native, start);
+    }
+
+    if (is_native) {
+        error_at(current(), "'native' can only mark a func or a method, found " +
+                                describe(current()));
+        synchronize_to_member();
+        return nullptr;
     }
 
     if (check(TokenKind::KwProcedures)) {
@@ -326,7 +343,8 @@ ast::Decl* Parser::parse_member(std::string_view class_name) {
     if (check(TokenKind::Identifier) && current().text == class_name &&
         peek(1).kind == TokenKind::LParen) {
         if (!explicit_visibility) visibility = ast::Visibility::Public;
-        return parse_method(ast::MethodForm::Constructor, visibility, explicit_visibility, start);
+        return parse_method(ast::MethodForm::Constructor, visibility, explicit_visibility, false,
+                            start);
     }
 
     if (!at_type_start()) {
@@ -340,11 +358,13 @@ ast::Decl* Parser::parse_member(std::string_view class_name) {
 }
 
 ast::MethodDecl* Parser::parse_method(ast::MethodForm form, ast::Visibility visibility,
-                                      bool explicit_visibility, diag::SourceLocation start) {
+                                      bool explicit_visibility, bool is_native,
+                                      diag::SourceLocation start) {
     auto* decl = arena_.create<ast::MethodDecl>(start);
     decl->form = form;
     decl->visibility = visibility;
     decl->explicit_visibility = explicit_visibility;
+    decl->is_native = is_native;
 
     if (!check(TokenKind::Identifier)) {
         error_at(current(), "expected a name, found " + describe(current()));
@@ -375,6 +395,17 @@ ast::MethodDecl* Parser::parse_method(ast::MethodForm form, ast::Visibility visi
         error_at(current(), "a constructor cannot declare a return type");
         decl->return_type = nullptr;
         decl->explicit_void = false;
+    }
+
+    // A native member is a declaration, not a definition.
+    if (decl->is_native) {
+        if (check(TokenKind::LBrace)) {
+            error_at(current(), "a native member cannot have a body");
+            decl->body = parse_block();
+            return decl;
+        }
+        expect(TokenKind::Semicolon, "after a native declaration");
+        return decl;
     }
 
     if (!check(TokenKind::LBrace)) {

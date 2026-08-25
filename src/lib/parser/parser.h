@@ -46,10 +46,11 @@ private:
     // --- grammar ---
     ast::ImportDecl* parse_import();
     ast::ClassDecl* parse_class(ast::Visibility visibility, bool explicit_visibility,
-                                diag::SourceLocation start);
+                                diag::SourceLocation start, bool is_namespace);
     ast::Decl* parse_member(std::string_view class_name);
     ast::MethodDecl* parse_method(ast::MethodForm form, ast::Visibility visibility,
-                                  bool explicit_visibility, diag::SourceLocation start);
+                                  bool explicit_visibility, bool is_native,
+                                  diag::SourceLocation start);
     ast::ProceduresDecl* parse_procedures(ast::Visibility visibility, bool explicit_visibility,
                                           diag::SourceLocation start);
     ast::FieldDecl* parse_field(ast::Visibility visibility, bool explicit_visibility,

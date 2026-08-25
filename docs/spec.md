@@ -232,20 +232,49 @@ materialize with **no** allocation arguments, which the checker enforces.
 Root-class materialization is the other form: the first top-level class is
 materialized and its `Procedures` block fires, with nothing called afterwards.
 
-## 9. Built-in namespaces
+## 9. Namespaces and native declarations
 
-`khuStdMath`, `io` and `khu` are namespaces, not classes: they are never
-materialized and their members are reached as `Namespace.member(...)`.
+```
+[visibility] namespace Name { native-member* }
+```
+
+A namespace is a container of static members that is never materialized. Its
+members are reached as `Name.member(...)`, and every one of them must be
+`native`: a namespace has no receiver, so its implementations come from the
+toolchain.
+
+```khudra
+public namespace khuStdMath {
+    native func add(int32 a, int32 b) -> int32;
+}
+```
+
+A `native` member is a declaration, not a definition -- no body, terminated by
+`;`. Each one is bound either to a **bytecode instruction** (an intrinsic) or to
+a **runtime call**; the binding table is in `src/lib/sema/builtins.cpp`, and an
+unbound declaration is a compile error. `native` is only legal on a namespace
+member.
+
+### 9.1 The standard library
+
+`lib/*.khu` is the standard library, written in Khudra and embedded in the
+`khudra` binary at build time. Because the signatures are real declarations,
+overload resolution, arity checking and error messages work there exactly as
+they do for user code.
 
 | Namespace | Members |
 |---|---|
-| `khuStdMath` | `add` `subtract` `multiply` `divide` `remainder`, declared once per numeric width; `convertTo(<type>, expr)` |
+| `khuStdMath` | `add` `subtract` `multiply` `divide` once per numeric width, `remainder` once per integer width; plus the `convertTo` intrinsic |
 | `io` | `print` / `printLine` over `string`, `bool` and every numeric width; `readLine() -> string` |
-| `khu` | the runtime namespace; populated in Phase 7 from `lib/` |
+| `khu` | `stdlibLoadObject()`, `getType() -> Array`, `LoadRuntimeType() -> Array` |
 
-`khuStdMath.convertTo` is an intrinsic: its first argument is a type, and it
-lowers to a `convert` instruction rather than a call. It is the only sanctioned
-way to move a value between widths.
+`lib/core.khu` documents the built-in types, which are part of the language
+rather than declarations.
+
+`khuStdMath.convertTo` is the one operation that cannot be declared in Khudra:
+its first argument is a *type*, which there is no way to write as a parameter.
+It is a compiler intrinsic, lowers to the `convert` instruction, and is the only
+sanctioned way to move a value between widths.
 
 ## 10. A note on `example.khu`
 

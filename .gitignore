@@ -8,6 +8,7 @@ build/Makefile
 build/*.cmake
 build/cmake-build-*/
 build/Testing/
+build/generated/
 build/khudra
 build/khudra[._]*
 

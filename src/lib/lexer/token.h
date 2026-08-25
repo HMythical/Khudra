@@ -43,6 +43,8 @@ namespace khu::lexer {
 #define KHU_TOKEN_KEYWORDS(X)                                       \
     X(KwBring, "bring")                                             \
     X(KwClass, "class")                                             \
+    X(KwNamespace, "namespace")                                     \
+    X(KwNative, "native")                                           \
     X(KwExtends, "extends")                                         \
     X(KwPublic, "public")                                           \
     X(KwPrivate, "private")                                         \

@@ -50,10 +50,26 @@ add_library(khu_util STATIC ${KHU_UTIL_SOURCES})
 target_include_directories(khu_util PUBLIC "${CMAKE_SOURCE_DIR}/src")
 
 # ---------------------------------------------------------------------------
+# Standard library -- lib/*.khu embedded into the toolchain
+# ---------------------------------------------------------------------------
+file(GLOB KHU_STDLIB_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/lib/*.khu")
+list(SORT KHU_STDLIB_SOURCES)
+set(KHU_STDLIB_GENERATED "${CMAKE_BINARY_DIR}/generated/khu_stdlib_sources.cpp")
+add_custom_command(
+    OUTPUT "${KHU_STDLIB_GENERATED}"
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTPUT=${KHU_STDLIB_GENERATED}
+        "-DSOURCES=${KHU_STDLIB_SOURCES}"
+        -P "${CMAKE_SOURCE_DIR}/scripts/embed_stdlib.cmake"
+    DEPENDS ${KHU_STDLIB_SOURCES} "${CMAKE_SOURCE_DIR}/scripts/embed_stdlib.cmake"
+    COMMENT "Embedding the Khudra standard library"
+    VERBATIM)
+
+# ---------------------------------------------------------------------------
 # khu_frontend -- diagnostics, lexer, parser, sema, codegen, bytecode
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE KHU_FRONTEND_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/lib/*.cpp")
-add_library(khu_frontend STATIC ${KHU_FRONTEND_SOURCES})
+add_library(khu_frontend STATIC ${KHU_FRONTEND_SOURCES} "${KHU_STDLIB_GENERATED}")
 target_include_directories(khu_frontend PUBLIC "${CMAKE_SOURCE_DIR}/src/lib")
 target_link_libraries(khu_frontend PUBLIC khu_util)
 

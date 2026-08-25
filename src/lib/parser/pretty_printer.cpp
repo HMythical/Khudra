@@ -46,9 +46,12 @@ int precedence_of(const ast::Expr* expr) {
     }
 }
 
-// A member that owns a brace block gets blank lines around it.
+// A member that owns a brace block gets blank lines around it. A native
+// declaration has no body, so it groups with the fields instead.
 bool is_block_member(const ast::Decl& decl) {
-    return decl.kind == ast::DeclKind::Method || decl.kind == ast::DeclKind::Procedures;
+    if (decl.kind == ast::DeclKind::Procedures) return true;
+    if (decl.kind != ast::DeclKind::Method) return false;
+    return !static_cast<const ast::MethodDecl&>(decl).is_native;
 }
 
 }  // namespace
@@ -93,7 +96,7 @@ void PrettyPrinter::emit_visibility(ast::Visibility visibility, bool explicit_vi
 
 void PrettyPrinter::emit_class(const ast::ClassDecl& decl) {
     emit_visibility(decl.visibility, decl.explicit_visibility);
-    out_.append("class ").append(decl.name);
+    out_.append(decl.is_namespace ? "namespace " : "class ").append(decl.name);
     if (!decl.base_name.empty()) out_.append(" extends ").append(decl.base_name);
     out_.append_line(" {");
 
@@ -150,6 +153,7 @@ void PrettyPrinter::emit_params(const util::Array<ast::ParamDecl*>& params) {
 void PrettyPrinter::emit_method(const ast::MethodDecl& decl) {
     out_.indent(depth_);
     emit_visibility(decl.visibility, decl.explicit_visibility);
+    if (decl.is_native) out_.append("native ");
     switch (decl.form) {
         case ast::MethodForm::Func: out_.append("func "); break;
         case ast::MethodForm::Method: out_.append("method "); break;
@@ -163,6 +167,11 @@ void PrettyPrinter::emit_method(const ast::MethodDecl& decl) {
         emit_type(decl.return_type);
     } else if (decl.explicit_void) {
         out_.append(" -> void");
+    }
+
+    if (decl.is_native) {
+        out_.append_line(";");
+        return;
     }
 
     out_.append(' ');
@@ -617,7 +626,7 @@ bool equal_decl(const ast::Decl* left, const ast::Decl* right) {
             const auto& b = *static_cast<const ast::MethodDecl*>(right);
             return a.name == b.name && a.form == b.form && a.visibility == b.visibility &&
                    a.explicit_visibility == b.explicit_visibility &&
-                   a.explicit_void == b.explicit_void &&
+                   a.explicit_void == b.explicit_void && a.is_native == b.is_native &&
                    equal_type(a.return_type, b.return_type) &&
                    equal_list(a.params, b.params, equal_param) &&
                    equal_stmt(a.body, b.body);
@@ -634,7 +643,7 @@ bool equal_decl(const ast::Decl* left, const ast::Decl* right) {
             const auto& a = *static_cast<const ast::ClassDecl*>(left);
             const auto& b = *static_cast<const ast::ClassDecl*>(right);
             return a.name == b.name && a.base_name == b.base_name &&
-                   a.visibility == b.visibility &&
+                   a.visibility == b.visibility && a.is_namespace == b.is_namespace &&
                    a.explicit_visibility == b.explicit_visibility &&
                    equal_list(a.members, b.members, equal_decl);
         }

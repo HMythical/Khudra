@@ -41,13 +41,17 @@ class Checker {
 public:
     Checker(TypeContext& types, diag::DiagnosticEngine& diagnostics, util::Arena& arena);
 
-    // Runs every pass over `unit`. Always returns a Program; inspect
-    // diagnostics for errors.
+    // Runs every pass over all `units`. `entry_unit` is the user's program --
+    // the standard library units around it never supply an entry point.
+    // Always returns a Program; inspect diagnostics for errors.
+    Program* check(util::Array<ast::CompilationUnit*> units, ast::CompilationUnit& entry_unit);
+    // Single-unit convenience used by the tests.
     Program* check(ast::CompilationUnit& unit);
 
 private:
     // --- passes ---
     void declare_classes(ast::CompilationUnit& unit);
+    void declare_namespace_members(ClassSymbol& symbol);
     void resolve_inheritance();
     void declare_members();
     void resolve_strategies();
