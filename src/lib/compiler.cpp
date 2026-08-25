@@ -1,5 +1,6 @@
 #include "compiler.h"
 
+#include "codegen/emitter.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 
@@ -31,6 +32,19 @@ sema::Program* Compiler::analyze(std::uint32_t file_id) {
     // reporting only the first syntax error would hide everything behind it.
     sema::Checker checker(types_, diagnostics_, arena_);
     return checker.check(*unit);
+}
+
+}  // namespace khu
+
+namespace khu {
+
+bool Compiler::compile(std::uint32_t file_id, bytecode::Module& out) {
+    sema::Program* program = analyze(file_id);
+    if (!program || diagnostics_.has_errors()) return false;
+
+    codegen::Emitter emitter(*program, diagnostics_);
+    if (!emitter.emit(*unit_, sources_.path(file_id), out)) return false;
+    return !diagnostics_.has_errors();
 }
 
 }  // namespace khu
