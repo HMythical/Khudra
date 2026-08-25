@@ -1,7 +1,8 @@
 # Procedures
 
-Status: **draft** (written in Phase 0, per KHU-PLAN.md "Execution order & risk";
-the Phase 6 C engine in `utils/proc_engine.c` implements this document).
+Status: implemented. Written as a draft in Phase 0, before the code that
+depends on it; `utils/proc_engine.c` implements this document and
+`tests/unit/test_procedures.cpp` checks it.
 
 A **Procedure** is Khudra's third core feature: a named block in a class body
 that executes *immediately when an object instance is materialized* -- when it is
@@ -89,9 +90,19 @@ ones; the checker rejects a chain that disagrees.
 
 Steps 1-6 are driven by `khu_proc_materialize` in `utils/proc_engine.c`. The
 engine is **C**; every step that needs VM state calls back into the C++ VM
-through the `KhuProcHostApi` table in `utils/proc_engine.h`. Keeping the engine
-in C keeps the materialization pipeline -- the piece most likely to be reused by
-an FFI or an alternate backend -- behind a stable ABI.
+through the `KhuProcHostApi` table in `utils/proc_engine.h`
+(`src/vm/proc_host.cpp` is the VM's half). Keeping the engine in C keeps the
+materialization pipeline -- the piece most likely to be reused by an FFI or an
+alternate backend -- behind a stable ABI, and puts the ordering guarantees the
+language makes promises about in one readable place.
+
+The engine holds no VM state at all: an inheritance chain is walked through
+`chain_length` / `chain_at`, a step is performed through `run_*`, and the
+half-built object is kept alive across a collection through `retain` /
+`release`. Argument binding happens **first**, before the allocation: a
+Procedures block may materialize other objects on the same value stack, so the
+allocation-site arguments are lifted off it and rooted before anything else can
+touch it.
 
 ## 4. Ordering and nesting
 
@@ -107,10 +118,19 @@ public class A { private Procedures { B b = B(); } }
 public class B { private Procedures { A a = A(); } }
 ```
 
-This recurses until the engine's depth limit is reached, at which point
-materialization fails with `KHU_PROC_PROCEDURE_FAILED` and a runtime error
-naming the cycle. The checker cannot reject this statically in general, so the
-guard is a runtime one.
+This recurses until `KHU_PROC_MAX_DEPTH` is reached, at which point
+materialization fails with `KHU_PROC_DEPTH_EXCEEDED`:
+
+```
+cycle.khu:8:9: runtime error: materialization nested too deeply; a Procedures
+block that materializes its own class recurses without end
+    at B.Procedures (cycle.khu:8:9)
+    at A.Procedures (cycle.khu:3:9)
+    ... 249 more frames
+```
+
+The checker cannot reject this statically in general -- the allocation may be
+behind a condition, or several classes deep -- so the guard is a runtime one.
 
 ## 5. Failure semantics
 
@@ -120,8 +140,10 @@ If a Procedures block aborts (a runtime error, or the depth guard):
 2. The object is **not** registered as live and its reference is never returned
    to the allocation site.
 3. The partially materialized object is discarded: `KhuProcHostApi::discard`
-   releases its memory (manual) or drops it from the allocation list before it
-   is ever traced (managed).
+   returns a manual object to its arena, and simply never registers a managed
+   one -- nothing refers to it, so the next collection reclaims it. A manual
+   object that the block managed to get pinned is left alone rather than freed,
+   because releasing it would leave a dangling managed slot.
 4. Objects the block already fully materialized *are* live -- they completed
    their own pipelines. Rolling those back would require undoing arbitrary
    outward calls, so Khudra does not attempt it.

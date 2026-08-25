@@ -446,6 +446,32 @@ KHU_TEST(sema, accepts_a_free_once_the_pin_is_cleared) {
         "}\n");
 }
 
+KHU_TEST(sema, lets_an_allocation_site_override_decide_a_free) {
+    // The site token beats the class default in both directions.
+    KHU_ACCEPTS(
+        "public class Managed {\n"
+        "    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();\n"
+        "}\n"
+        "public class A {\n"
+        "    func go() {\n"
+        "        Managed forced = Managed(manual);\n"
+        "        free(forced);\n"
+        "    }\n"
+        "}\n");
+
+    KHU_REJECTS(
+        "public class Owned {\n"
+        "    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();\n"
+        "}\n"
+        "public class A {\n"
+        "    func go() {\n"
+        "        Owned collected = Owned(standard);\n"
+        "        free(collected);\n"
+        "    }\n"
+        "}\n",
+        "it is garbage collected");
+}
+
 KHU_TEST(sema, rejects_a_double_release) {
     KHU_REJECTS(
         "public class Node {\n"

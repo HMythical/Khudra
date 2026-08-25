@@ -54,6 +54,11 @@ struct VarSymbol {
     // Parameters and locals
     std::uint32_t frame_index = 0;
     bool has_initializer = false;
+    // Set when the declaration's initializer was an allocation site with an
+    // explicit `manual` / `standard` token: that override beats the class
+    // default, so `free` has to judge by it.
+    bool has_site_strategy = false;
+    Strategy site_strategy = Strategy::Gc;
 
     bool is_field() const { return role == VarRole::Field; }
 };

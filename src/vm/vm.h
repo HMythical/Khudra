@@ -9,6 +9,10 @@
 #include <cstdint>
 #include <string>
 
+extern "C" {
+#include "proc_engine.h"
+}
+
 #include "bytecode/module.h"
 #include "gc/collector.h"
 #include "util/array.h"
@@ -57,6 +61,29 @@ public:
     // walks those itself.
     void enumerate_roots(Collector& collector) override;
 
+    // --- Procedure engine host (utils/proc_engine.h) ---
+    //
+    // The engine in utils/proc_engine.c owns the order of the materialization
+    // pipeline; these are the steps it drives. They are public because the C
+    // callback table in proc_host.cpp calls them.
+    std::uint32_t proc_chain_length(std::uint32_t class_id);
+    std::uint32_t proc_chain_at(std::uint32_t class_id, std::uint32_t index);
+    Object* proc_allocate(std::uint32_t class_id, KhuStrategy strategy);
+    bool proc_has_field_init(std::uint32_t class_id);
+    bool proc_run_field_init(Object* object, std::uint32_t class_id);
+    bool proc_take_arguments(std::uint32_t argc);
+    void proc_push_arguments(std::uint32_t argc);
+    void proc_drop_arguments();
+    bool proc_has_procedures(std::uint32_t class_id);
+    bool proc_run_procedures(Object* object, std::uint32_t class_id, std::uint32_t argc);
+    bool proc_has_constructor(std::uint32_t class_id);
+    bool proc_run_constructor(Object* object, std::uint32_t class_id, std::uint32_t argc);
+    void proc_register_live(Object* object);
+    void proc_discard(Object* object);
+    void proc_retain(Object* object);
+    void proc_release(Object* object);
+    void proc_report_error(const char* message);
+
 private:
     struct Frame {
         const bytecode::MethodEntry* method = nullptr;
@@ -82,7 +109,6 @@ private:
     // The materialization pipeline (docs/procedures.md). Phase 6 moves the
     // driving loop into the C engine; the steps themselves live here.
     bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
-    bool run_field_initializers(RuntimeClass& type, Object* object);
     bool release_manual(Value target);
     // Allocates, collecting first when the heap has grown past its threshold.
     Object* allocate(RuntimeClass& type, bool manual);
@@ -109,6 +135,10 @@ private:
     // Values held only by a native frame -- a half-materialized object, its
     // allocation arguments -- which the interpreter's stack cannot see.
     util::Array<Value> native_roots_;
+    // Allocation-site arguments the Procedure engine has lifted off the stack,
+    // as a stack of frames because nested materializations run depth-first.
+    util::Array<Value> staged_arguments_;
+    util::Array<std::size_t> staged_marks_;
     bool prepared_ = false;
     util::Array<Value> stack_;
     util::Array<Frame*> frames_;

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "bytecode/native.h"
+#include "vm/proc_host.h"
 
 namespace khu::vm {
 
@@ -46,6 +47,7 @@ bool Vm::prepare() {
     std::string error;
     if (!classes_.load(module_, error)) return trap("cannot load the class table: " + error);
     collector_.set_root_source(this);
+    install_proc_host(*this);
     prepared_ = true;
     return true;
 }
@@ -58,6 +60,7 @@ void Vm::enumerate_roots(Collector& collector) {
         for (const Value& local : frame->locals) collector.mark_value(local);
     }
     for (const Value& value : native_roots_) collector.mark_value(value);
+    for (const Value& value : staged_arguments_) collector.mark_value(value);
 }
 
 // Allocation is the only thing that triggers a cycle, and it happens with every
@@ -93,6 +96,7 @@ void Vm::write_barrier(Object* owner, const RuntimeClass& type, std::uint32_t sl
 }
 
 Vm::~Vm() {
+    uninstall_proc_host(*this);
     for (std::string* text : runtime_strings_) delete text;
 }
 
@@ -152,9 +156,18 @@ bool Vm::trap(std::string message) {
         text = "khudra: runtime error: " + message + "\n";
     }
 
+    // A runaway recursion produces hundreds of identical frames; showing the
+    // top few and a count is more useful than all of them.
+    constexpr std::size_t kMaxTraceFrames = 12;
+    std::size_t shown = 0;
     for (std::size_t i = frames_.size(); i > 0; --i) {
         const Frame& frame = *frames_[i - 1];
         if (!frame.method) continue;
+        if (shown == kMaxTraceFrames) {
+            text += "    ... " + std::to_string(i) + " more frames\n";
+            break;
+        }
+        ++shown;
         const bytecode::ClassEntry* owner =
             module_.class_at(static_cast<std::int32_t>(frame.method->owner_class));
         text += "    at ";
@@ -760,84 +773,168 @@ bool Vm::execute(Frame& frame, Value& result) {
 // Materialization
 // ---------------------------------------------------------------------------
 
-// The inheritance chain from the root down to `type`. Every stage of
-// materialization walks it in this order, so a derived class never observes
-// uninitialized inherited state.
-static void collect_chain(RuntimeClass& type, util::Array<RuntimeClass*>& out) {
+// ---------------------------------------------------------------------------
+// Procedure engine host
+// ---------------------------------------------------------------------------
+//
+// The pipeline itself lives in utils/proc_engine.c. What follows is the set of
+// steps it drives; each one does exactly one thing and reports failure by
+// returning false after trapping.
+
+namespace {
+
+// The inheritance chain from the root down to `type`.
+void collect_chain(RuntimeClass& type, util::Array<RuntimeClass*>& out) {
     if (type.base) collect_chain(*type.base, out);
     out.push(&type);
 }
 
-bool Vm::run_field_initializers(RuntimeClass& type, Object* object) {
-    if (type.base && !run_field_initializers(*type.base, object)) return false;
-    if (type.field_init_index < 0) return true;
-    Value ignored;
-    return call_method(type.field_init_index, Value::make_ref(object), ignored);
+}  // namespace
+
+std::uint32_t Vm::proc_chain_length(std::uint32_t class_id) {
+    RuntimeClass* type = classes_.at(class_id);
+    std::uint32_t length = 0;
+    for (RuntimeClass* step = type; step; step = step->base) ++length;
+    return length;
 }
+
+std::uint32_t Vm::proc_chain_at(std::uint32_t class_id, std::uint32_t index) {
+    RuntimeClass* type = classes_.at(class_id);
+    if (!type) return class_id;
+    util::Array<RuntimeClass*> chain;
+    collect_chain(*type, chain);
+    if (index >= chain.size()) return class_id;
+    return chain[index]->class_id;
+}
+
+Object* Vm::proc_allocate(std::uint32_t class_id, KhuStrategy strategy) {
+    RuntimeClass* type = classes_.at(class_id);
+    if (!type) {
+        trap("unknown class id " + std::to_string(class_id));
+        return nullptr;
+    }
+    bool manual = strategy == KHU_STRATEGY_MANUAL ||
+                  (strategy == KHU_STRATEGY_CLASS_DEFAULT && type->manual);
+    Object* object = allocate(*type, manual);
+    if (!object) trap("out of memory materializing '" + std::string(type->name) + "'");
+    return object;
+}
+
+bool Vm::proc_has_field_init(std::uint32_t class_id) {
+    RuntimeClass* type = classes_.at(class_id);
+    return type && type->field_init_index >= 0;
+}
+
+bool Vm::proc_run_field_init(Object* object, std::uint32_t class_id) {
+    RuntimeClass* type = classes_.at(class_id);
+    if (!type || type->field_init_index < 0) return true;
+    Value ignored;
+    return call_method(type->field_init_index, Value::make_ref(object), ignored);
+}
+
+bool Vm::proc_take_arguments(std::uint32_t argc) {
+    if (stack_.size() < argc) {
+        trap("allocation site supplied fewer arguments than the class binds");
+        return false;
+    }
+    staged_marks_.push(staged_arguments_.size());
+    // They come off the stack in reverse, so put them back in declaration order.
+    std::size_t base = staged_arguments_.size();
+    staged_arguments_.resize(base + argc);
+    for (std::size_t i = argc; i > 0; --i) staged_arguments_[base + i - 1] = pop();
+    return true;
+}
+
+void Vm::proc_push_arguments(std::uint32_t argc) {
+    if (staged_marks_.empty()) return;
+    std::size_t base = staged_marks_.back();
+    for (std::uint32_t i = 0; i < argc && base + i < staged_arguments_.size(); ++i) {
+        push(staged_arguments_[base + i]);
+    }
+}
+
+void Vm::proc_drop_arguments() {
+    if (staged_marks_.empty()) return;
+    staged_arguments_.resize(staged_marks_.back());
+    staged_marks_.pop();
+}
+
+bool Vm::proc_has_procedures(std::uint32_t class_id) {
+    RuntimeClass* type = classes_.at(class_id);
+    return type && type->procedures_index >= 0;
+}
+
+bool Vm::proc_run_procedures(Object* object, std::uint32_t class_id, std::uint32_t argc) {
+    (void)argc;
+    RuntimeClass* type = classes_.at(class_id);
+    if (!type || type->procedures_index < 0) return true;
+    Value ignored;
+    return call_method(type->procedures_index, Value::make_ref(object), ignored);
+}
+
+bool Vm::proc_has_constructor(std::uint32_t class_id) {
+    RuntimeClass* type = classes_.at(class_id);
+    return type && type->constructor_index >= 0;
+}
+
+bool Vm::proc_run_constructor(Object* object, std::uint32_t class_id, std::uint32_t argc) {
+    (void)argc;
+    RuntimeClass* type = classes_.at(class_id);
+    if (!type || type->constructor_index < 0) return true;
+    Value ignored;
+    return call_method(type->constructor_index, Value::make_ref(object), ignored);
+}
+
+void Vm::proc_register_live(Object* object) {
+    // The object is already on the heap's live list; this is the point at which
+    // it becomes a materialized instance rather than a half-built one.
+    if (object) object->header.flags |= kObjectMaterialized;
+}
+
+void Vm::proc_discard(Object* object) {
+    if (!object) return;
+    // A manual object goes straight back to its arena -- unless something the
+    // block ran pinned it, in which case releasing it would leave a dangling
+    // managed slot. A managed object is simply never registered: nothing refers
+    // to it, so the next cycle reclaims it.
+    if (object->is_manual() && object->header.pin_count == 0) heap_.free_manual(object);
+}
+
+void Vm::proc_retain(Object* object) {
+    if (object) native_roots_.push(Value::make_ref(object));
+}
+
+void Vm::proc_release(Object* object) {
+    (void)object;
+    if (!native_roots_.empty()) native_roots_.pop();
+}
+
+void Vm::proc_report_error(const char* message) { trap(message); }
 
 bool Vm::materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out) {
     RuntimeClass* type = classes_.at(class_id);
     if (!type) return trap("unknown class id " + std::to_string(class_id));
 
-    bool manual = strategy == bytecode::StrategyByte::Manual ||
-                  (strategy == bytecode::StrategyByte::ClassDefault && type->manual);
+    KhuStrategy engine_strategy = strategy == bytecode::StrategyByte::Manual
+                                      ? KHU_STRATEGY_MANUAL
+                                      : (strategy == bytecode::StrategyByte::Gc
+                                             ? KHU_STRATEGY_GC
+                                             : KHU_STRATEGY_CLASS_DEFAULT);
 
-    // The allocation-site arguments are on the stack; both the Procedures block
-    // and the constructor receive the same ones. They come off the stack here,
-    // so they have to be roots for as long as this materialization runs.
-    std::size_t root_mark = native_roots_.size();
-    util::Array<Value> args;
-    for (std::uint8_t i = 0; i < type->materialize_argc; ++i) {
-        args.push(pop());
-        native_roots_.push(args.back());
+    KhuObject* created = nullptr;
+    KhuProcStatus status = khu_proc_materialize(class_id, engine_strategy,
+                                                type->materialize_argc, &created);
+    if (status != KHU_PROC_OK) {
+        // The engine reports the depth guard itself, and every step traps on
+        // its own failure; only an unreported status needs a message here.
+        if (!has_error()) {
+            return trap("cannot materialize '" + std::string(type->name) + "': " +
+                        khu_proc_status_name(status));
+        }
+        return false;
     }
 
-    // 1. allocate per strategy, 2. link the object (header + defaults)
-    Object* object = allocate(*type, manual);
-    if (!object) {
-        native_roots_.resize(root_mark);
-        return trap("out of memory materializing '" + std::string(type->name) + "'");
-    }
-    Value reference = Value::make_ref(object);
-    // Nothing on the interpreter stack refers to the new object yet, so a
-    // collection triggered by a nested allocation would reclaim it.
-    native_roots_.push(reference);
-
-    struct RootScope {
-        util::Array<Value>& roots;
-        std::size_t mark;
-        ~RootScope() { roots.resize(mark); }
-    } scope{native_roots_, root_mark};
-
-    util::Array<RuntimeClass*> chain;
-    collect_chain(*type, chain);
-
-    // 3. field initializers, part of linking
-    if (!run_field_initializers(*type, object)) return false;
-
-    // 4. Procedures blocks, base class first. Every block in the chain runs
-    //    before any constructor body does, which is what "Procedures runs
-    //    before the constructor" means for an inherited class.
-    //    Phase 6 moves this loop into the C engine.
-    for (RuntimeClass* step : chain) {
-        if (step->procedures_index < 0) continue;
-        for (std::size_t i = args.size(); i > 0; --i) push(args[i - 1]);
-        Value ignored;
-        if (!call_method(step->procedures_index, reference, ignored)) return false;
-    }
-
-    // 5. constructor bodies, base class first: the base sets up its own fields
-    //    and the derived class may then overwrite them.
-    for (RuntimeClass* step : chain) {
-        if (step->constructor_index < 0) continue;
-        for (std::size_t i = args.size(); i > 0; --i) push(args[i - 1]);
-        Value ignored;
-        if (!call_method(step->constructor_index, reference, ignored)) return false;
-    }
-
-    // 6. register the object as live and hand the reference back
-    object->header.flags |= kObjectMaterialized;
-    out = reference;
+    out = Value::make_ref(reinterpret_cast<Object*>(created));
     return true;
 }
 

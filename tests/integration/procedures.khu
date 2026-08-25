@@ -1,0 +1,74 @@
+// What a Procedures block guarantees: it runs the moment an object is loaded
+// into memory, before the constructor body and before the allocation site
+// resumes, and it may reach outward while it does.
+bring khu::stdlib;
+
+public class Resource {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();
+    public int32 id = 0;
+
+    private Procedures(int32 handle) {
+        io.print("    resource ");
+        io.print(handle);
+        io.printLine(" acquired");
+    }
+
+    public Resource(int32 handle) {
+        this.id = handle;
+    }
+}
+
+public class Session {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+    public Resource primary = null;
+    public int32 seed = 0;
+
+    // Nested allocation: the Resource is fully materialized -- its own block and
+    // constructor complete -- before the next statement here runs.
+    private Procedures(int32 seedValue) {
+        io.printLine("  session block start");
+        Resource resource = Resource(seedValue);
+        this.primary = resource;
+        io.printLine("  session block end");
+    }
+
+    public Session(int32 seedValue) {
+        io.print("  session constructor, seed ");
+        io.printLine(seedValue);
+        this.seed = seedValue;
+    }
+
+    func release() {
+        Resource doomed = this.primary;
+        this.primary = null;
+        free(doomed);
+    }
+}
+
+public class Audited extends Session {
+    private Procedures(int32 seedValue) {
+        io.printLine("  audited block (runs after the base block)");
+    }
+
+    public Audited(int32 seedValue) {
+        io.printLine("  audited constructor (runs after the base constructor)");
+    }
+}
+
+public class Program {
+    func main() {
+        io.printLine("before Session(7)");
+        Session s = Session(7);
+        io.printLine("after Session(7)");
+        io.print("seed is ");
+        io.printLine(s.seed);
+        io.print("resource id is ");
+        io.printLine(s.primary.id);
+        s.release();
+
+        io.printLine("before Audited(9)");
+        Audited a = Audited(9);
+        io.printLine("after Audited(9)");
+        a.release();
+    }
+}
