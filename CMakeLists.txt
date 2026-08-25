@@ -21,6 +21,19 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Address and undefined-behaviour sanitizers. The memory-systems tests are
+# meant to be run under these (KHU-PLAN.md, Phase 5 acceptance):
+#   cmake -S . -B build-asan -DKHU_SANITIZE=ON && ctest --test-dir build-asan
+option(KHU_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(KHU_SANITIZE)
+    if(MSVC)
+        message(WARNING "KHU_SANITIZE is not supported with MSVC; ignoring")
+    else()
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # khu_runtime_c -- C runtime: manual allocation, bool support, Procedure engine
 # ---------------------------------------------------------------------------
@@ -50,7 +63,8 @@ target_link_libraries(khu_frontend PUBLIC khu_util)
 file(GLOB_RECURSE KHU_VM_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/vm/*.cpp")
 if(KHU_VM_SOURCES)
     add_library(khu_vm STATIC ${KHU_VM_SOURCES})
-    target_include_directories(khu_vm PUBLIC "${CMAKE_SOURCE_DIR}/src/vm")
+    target_include_directories(khu_vm PUBLIC "${CMAKE_SOURCE_DIR}/src/vm"
+                                              "${CMAKE_SOURCE_DIR}/src")
     target_link_libraries(khu_vm PUBLIC khu_frontend khu_runtime_c)
     set(KHU_VM_TARGET khu_vm)
 else()

@@ -416,7 +416,8 @@ KHU_TEST(objects, reject_freeing_a_collected_object_before_it_runs) {
 
 KHU_TEST(objects, refuse_to_free_a_pinned_object_at_runtime) {
     // The pin count lives in the object header, so the VM enforces it even
-    // where the checker's intra-method analysis cannot see the assignment.
+    // where the checker's intra-method analysis cannot see the assignment --
+    // here the store happens inside another method.
     RunResult result = run_source(
         "public class Node {\n"
         "    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();\n"
@@ -431,10 +432,9 @@ KHU_TEST(objects, refuse_to_free_a_pinned_object_at_runtime) {
         "        free(n);\n"
         "    }\n"
         "}\n");
-    // Phase 4 stores the reference without the write barrier, so the pin count
-    // is still zero here; Phase 5 attaches the barrier and this becomes a trap.
     KHU_CHECK(result.compiled);
-    KHU_CHECK(result.ran);
+    KHU_CHECK(!result.ran);
+    KHU_CHECK_CONTAINS(result.runtime_error, "it is still held by 'Holder.held'");
 }
 
 KHU_TEST(objects, track_the_heap) {

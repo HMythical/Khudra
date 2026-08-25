@@ -10,6 +10,7 @@
 #include <string>
 
 #include "bytecode/module.h"
+#include "gc/collector.h"
 #include "util/array.h"
 #include "vm/class_table.h"
 #include "vm/heap.h"
@@ -18,7 +19,7 @@
 
 namespace khu::vm {
 
-class Vm {
+class Vm : public RootSource {
 public:
     explicit Vm(const bytecode::Module& module);
     Vm(const Vm&) = delete;
@@ -48,6 +49,13 @@ public:
     std::uint64_t instructions_executed() const { return instructions_; }
     const Heap& heap() const { return heap_; }
     const ClassTable& classes() const { return classes_; }
+    Collector& collector() { return collector_; }
+    const Collector& collector() const { return collector_; }
+
+    // Hands the collector the value stack, every live frame and any value a
+    // native frame is holding. Manual objects are roots too, and the collector
+    // walks those itself.
+    void enumerate_roots(Collector& collector) override;
 
 private:
     struct Frame {
@@ -76,6 +84,12 @@ private:
     bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
     bool run_field_initializers(RuntimeClass& type, Object* object);
     bool release_manual(Value target);
+    // Allocates, collecting first when the heap has grown past its threshold.
+    Object* allocate(RuntimeClass& type, bool manual);
+    // The managed-slot write barrier: assigning a manual reference into a
+    // collected object pins it, overwriting one drops the pin.
+    void write_barrier(Object* owner, const RuntimeClass& type, std::uint32_t slot,
+                       const Value& incoming);
 
     // Raises a runtime error carrying the current source position and a stack
     // trace, and unwinds.
@@ -91,6 +105,10 @@ private:
     const bytecode::Module& module_;
     ClassTable classes_;
     Heap heap_;
+    Collector collector_{heap_, classes_};
+    // Values held only by a native frame -- a half-materialized object, its
+    // allocation arguments -- which the interpreter's stack cannot see.
+    util::Array<Value> native_roots_;
     bool prepared_ = false;
     util::Array<Value> stack_;
     util::Array<Frame*> frames_;

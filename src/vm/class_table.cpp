@@ -21,6 +21,10 @@ bool ClassTable::load(const bytecode::Module& module, std::string& error) {
             static_cast<std::uint32_t>(sizeof(Object) + runtime.slot_count * sizeof(Value));
         runtime.materialize_argc = entry.materialize_argc;
 
+        for (const bytecode::FieldEntry& field : entry.fields) {
+            runtime.field_names.push(module.string_at(field.name));
+        }
+
         runtime.constructor_index = entry.constructor;
         runtime.procedures_index = entry.procedures;
         runtime.field_init_index = entry.field_init;

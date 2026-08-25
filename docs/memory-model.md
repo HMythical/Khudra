@@ -1,7 +1,8 @@
 # Khudra Memory Model
 
-Status: **draft** (written in Phase 0, per KHU-PLAN.md "Execution order & risk"; the
-Phase 2 checker and the Phase 5 runtime are validated against this document).
+Status: implemented. Written as a draft in Phase 0, before the code that
+depends on it; the Phase 2 checker and the Phase 5 runtime are validated
+against it.
 
 Khudra's second core feature is that *memory management is chosen through an
 object*. A class declares its strategy as an ordinary field, and an allocation
@@ -89,13 +90,15 @@ own rule.
 
 ### 4.1 manual -> managed: rooting
 
-A manual object holding a managed reference is a **GC root**. The collector
-cannot see manual memory as part of its normal heap walk, so manual objects that
-hold managed references are registered in a root set and traced from there. The
-managed object will not be reclaimed while the manual owner is alive.
+A manual object holding a managed reference is a **GC root**. Manual memory is
+outside the collected heap, so anything a live manual object still points at is
+reachable by definition.
 
-Freeing the manual owner removes it from the root set; the managed object then
-becomes collectable at the next cycle if nothing else holds it.
+The implementation does not keep a separate root set: the collector walks the
+live manual list at the start of every mark phase and traces each manual
+object's `MANAGED_REF` slots. Freeing the manual owner takes it off that list,
+and the managed object becomes collectable at the next cycle if nothing else
+holds it.
 
 ### 4.2 managed -> manual: reference-counted pinning
 
@@ -119,10 +122,23 @@ free(buffer);
 `free` (and its synonym `dispose`) is valid only on a **manual** object. At
 runtime:
 
-1. If `pin_count > 0`, raise a runtime error naming the managed objects that
-   still hold the target. Nothing is freed.
-2. Otherwise, remove the object from the manual arena's live list, drop any
-   roots it contributed, and release its memory.
+1. If `pin_count > 0`, raise a runtime error naming the managed slots that
+   still hold the target. Nothing is freed. The collector walks the managed heap
+   to find them -- a pin count alone does not tell the programmer what to clear:
+
+   ```
+   cannot free 'Node': it is still held by 'Holder.head';
+   clear the reference before releasing the object
+   ```
+
+2. Otherwise, take the object off the live manual list and return its chunk to
+   its class's arena. A released chunk is zeroed and reused, so a second `free`
+   of the same reference is caught by the live list rather than by reading a
+   header that no longer means anything:
+
+   ```
+   cannot free this object: it was already released
+   ```
 
 Freeing a pinned object is a hard error rather than a silent leak because a
 dangling manual pointer inside a traced object would corrupt the next GC cycle.
@@ -135,23 +151,39 @@ local within one block.
 
 ## 5. The collector
 
-A **mark-sweep** collector (`src/vm/gc/`):
+A **mark-sweep** collector (`src/vm/gc/collector.cpp`):
 
-- **Roots** = the VM value stack, call-frame locals, globals, the manual-object
-  root set (4.1), and any explicit pins.
+- **Roots** = the VM value stack, every live frame's receiver and locals, the
+  values a native frame is holding, and every live manual object (4.1).
 - **Mark** traces precisely through reference maps, following `MANAGED_REF`
-  slots only.
+  slots only. A `MANUAL_REF` is pinned rather than traced, and a `RAW` slot is
+  never a pointer -- so the collector never has to guess.
 - **Sweep** walks the intrusive `gc_link` list, reclaims unmarked objects, and
-  decrements pins for their `MANUAL_REF` slots before releasing them.
+  decrements pins for their `MANUAL_REF` slots before releasing them. Survivors
+  are relinked into a fresh list, so nothing is unlinked one at a time.
 - Collection is triggered by allocation once the managed heap passes a
-  threshold, which then grows with the live set.
+  threshold, which then grows with the live set (never below a floor).
+
+### 5.1 Native roots
+
+Materialization holds a partly built object and its allocation arguments in the
+VM's own C++ frame, where the interpreter's value stack cannot see them -- and a
+`Procedures` block is free to allocate, which can trigger a cycle right there.
+Those values are pushed onto a small **native root** array for the duration, so
+an object is never collected between being allocated and being returned to its
+allocation site.
 
 ## 6. Manual arenas
 
-`src/vm/manual/` allocates manual objects from per-class bump/block arenas.
+`src/vm/manual/arena.cpp` allocates manual objects from **per-class** arenas.
+Because every object of a class is the same size, an arena is a bump pointer
+over large blocks plus a free list of released chunks: no size-class
+bookkeeping, and a released object is reused immediately.
+
 Blocks come from `khu_manual_alloc` in the C runtime (`utils/alloc.c`), which
-tracks live bytes and blocks so the Phase 5 stress test can assert zero leaks
-without an external allocator.
+tracks live bytes and blocks -- so the stress tests assert zero leaks without an
+external allocator, and `ASAN_OPTIONS=detect_leaks=1` agrees. Build with
+`-DKHU_SANITIZE=ON` to run the suite under ASan and UBSan.
 
 ## 7. Worked example
 
