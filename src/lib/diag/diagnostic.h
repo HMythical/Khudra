@@ -70,7 +70,10 @@ public:
 
 private:
     Builder report(Severity severity, SourceLocation location, std::string message);
-    void render_one(const Diagnostic& diagnostic, int depth, std::string& out) const;
+    // `parent` suppresses re-printing the same source line for a note that
+    // points at exactly where its parent diagnostic already pointed.
+    void render_one(const Diagnostic& diagnostic, int depth, const SourceLocation* parent,
+                    std::string& out) const;
 
     const SourceManager& sources_;
     khu::util::Array<Diagnostic> diagnostics_;

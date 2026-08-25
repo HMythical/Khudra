@@ -693,7 +693,9 @@ ast::Expr* Parser::parse_postfix() {
         if (check(TokenKind::Dot)) {
             diag::SourceLocation loc = current().loc;
             advance();
-            if (!check(TokenKind::Identifier)) {
+            // `Procedures` is a keyword, but accepting it here lets Sema give
+            // the real diagnostic: a Procedures block is never invocable.
+            if (!check(TokenKind::Identifier) && !check(TokenKind::KwProcedures)) {
                 error_at(current(), "expected a member name after '.', found " +
                                         describe(current()));
                 return expr;
@@ -786,6 +788,10 @@ ast::Expr* Parser::parse_primary() {
             advance();
             return arena_.create<ast::StrategyExpr>(loc, ast::Strategy::Gc);
         case TokenKind::Identifier:
+            advance();
+            return arena_.create<ast::IdentifierExpr>(loc, token.text);
+        case TokenKind::KwProcedures:
+            // Same reason as above: let Sema explain why this cannot be called.
             advance();
             return arena_.create<ast::IdentifierExpr>(loc, token.text);
         case TokenKind::LParen: {

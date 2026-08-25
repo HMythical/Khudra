@@ -157,26 +157,32 @@ int run_stage(const Options& options) {
         if (!options.dump_ast) return 0;
     }
 
-    khu::ast::CompilationUnit* unit = compiler.parse(file_id);
-    compiler.diagnostics().print(stderr);
-    if (compiler.diagnostics().has_errors()) return 1;
-
     if (options.dump_ast) {
+        khu::ast::CompilationUnit* unit = compiler.parse(file_id);
+        compiler.diagnostics().print(stderr);
+        if (compiler.diagnostics().has_errors()) return 1;
         khu::parser::PrettyPrinter printer;
         std::string text = printer.print(*unit);
         std::fwrite(text.data(), 1, text.size(), stdout);
         return 0;
     }
 
-    // The front end is in place; the stages behind it arrive in later phases.
-    // The report still carries a real file:line:col.
+    compiler.analyze(file_id);
+    compiler.diagnostics().print(stderr);
+    if (compiler.diagnostics().has_errors()) return 1;
+
+    // `check` stops after semantic analysis by design.
+    if (options.command == Command::Check) return 0;
+
+    // The stages behind the front end arrive in later phases. The report still
+    // carries a real file:line:col.
     khu::diag::SourceLocation start{file_id, 1, 1, 0};
-    compiler.diagnostics()
-        .error(start, "'" + options.command_name + "' is not implemented yet")
-        .note(start, "the source parsed cleanly; semantic analysis lands in Phase 2 "
+    khu::diag::DiagnosticEngine& diagnostics = compiler.diagnostics();
+    diagnostics.error(start, "'" + options.command_name + "' is not implemented yet")
+        .note(start, "the source passed semantic analysis; bytecode and the VM land in Phase 3 "
                      "(see KHU-PLAN.md)");
 
-    compiler.diagnostics().print(stderr);
+    diagnostics.print(stderr);
     return 1;
 }
 

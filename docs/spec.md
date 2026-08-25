@@ -72,10 +72,13 @@ Rules:
 
 - All aliases canonicalize in the checker.
 - Integer literals default to `int32` unless context forces another width.
+- Float literals default to `dfloat` unless context asks for `float`.
 - **No implicit widening or narrowing.** Mixed-width arithmetic is only legal
   through `khuStdMath.convertTo(<type>, <expr>)`.
 - Overflow wraps. A checked/trapping mode is a future toggle.
 - `null` means "not instantiated yet", never "empty".
+- A field or local declared without an initializer holds its type's default:
+  `0` for numbers, `false` for `bool`, `null` for references.
 
 ## 3. Compilation units
 
@@ -114,9 +117,10 @@ accepted explicit synonym.
 
 ### 4.2 Visibility
 
-JVM-style member access. `private` members and locals are neither readable nor
-modifiable from another loaded object; `public` allows both. This applies to
-fields *and* to locals -- locals may carry a visibility modifier:
+Member access is **object-level**, not class-level. `private` members and locals
+are neither readable nor modifiable from another *loaded object*; `public`
+allows both. This applies to fields *and* to locals -- locals may carry a
+visibility modifier:
 
 ```khudra
 private i32 result = khuStdMath.add(x, y);
@@ -124,6 +128,26 @@ private i32 result = khuStdMath.add(x, y);
 
 Enforcement is an access-control pass in the type checker that tracks whether
 the accessing code is inside the owning object ("current object") or outside it.
+Because the rule is per object rather than per class, it is stricter than Java:
+
+```khudra
+public class Pair {
+    private int32 hidden = 0;
+    func copyFrom(Pair other) {
+        this.hidden = other.hidden;   // error: `other` is a different object
+    }
+}
+```
+
+Only `this` is the current object. Locals live in the current frame, so every
+access to one is a current-object access and always permitted.
+
+### 4.3 Inheritance
+
+`extends` gives single inheritance. A derived class's layout puts the base's
+fields first; a field may not shadow an inherited one. The vtable copies the
+base's entries and an override with the same name and parameter types replaces
+its slot. An override may not change the return type.
 
 ## 5. Statements
 
@@ -164,6 +188,12 @@ A **type may appear as an argument** where an intrinsic expects one:
 khuStdMath.convertTo(int64, y);
 ```
 
+## 6.1 Element types
+
+Indexing is defined for `*T` (yielding `T`) and for `string` (yielding
+`uint8`). `Array` has no element type, so it cannot be indexed yet -- typed
+containers arrive with generics (`docs/roadmap.md`).
+
 ## 7. Allocation sites
 
 An allocation site is a call whose callee resolves to a class name:
@@ -176,7 +206,15 @@ Sprite t      = Sprite(standard, x, y);
 
 The optional leading `manual` / `standard` token selects the memory strategy and
 is consumed by the allocator; the remaining arguments are bound to the class's
-`Procedures` parameters. See `docs/memory-model.md`.
+**materialization signature**:
+
+- the `Procedures` block's parameters, when it declares any;
+- otherwise the constructor's parameters;
+- otherwise none.
+
+Both the `Procedures` block and the constructor receive the same allocation-site
+arguments, so if both declare parameters they must be identical. See
+`docs/memory-model.md` and `docs/procedures.md`.
 
 ## 8. Entry point
 
@@ -185,3 +223,27 @@ Both forms are supported and `khudra run` dispatches accordingly:
 1. an explicit `func main()`, or
 2. **root-class materialization** -- when no `main` exists, the first top-level
    class is materialized and its `Procedures` block fires.
+
+## 9. Built-in namespaces
+
+`khuStdMath`, `io` and `khu` are namespaces, not classes: they are never
+materialized and their members are reached as `Namespace.member(...)`.
+
+| Namespace | Members |
+|---|---|
+| `khuStdMath` | `add` `subtract` `multiply` `divide` `remainder`, declared once per numeric width; `convertTo(<type>, expr)` |
+| `io` | `print` / `printLine` over `string`, `bool` and every numeric width; `readLine() -> string` |
+| `khu` | the runtime namespace; populated in Phase 7 from `lib/` |
+
+`khuStdMath.convertTo` is an intrinsic: its first argument is a type, and it
+lowers to a `convert` instruction rather than a call. It is the only sanctioned
+way to move a value between widths.
+
+## 10. A note on `example.khu`
+
+`example.khu` at the project root is the **syntax** reference -- it is what
+Phase 1 round-trips. It is not a valid program: it calls placeholder functions
+that do not exist (`pointToOtherInstructionOutsideClass()`) and it mixes widths
+without converting (`khuStdMath.subtract(x, z)` on an `int` and a `dfloat`), so
+`khudra check example.khu` reports errors by design. The programs under
+`examples/` are the ones that type-check.

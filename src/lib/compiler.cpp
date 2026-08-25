@@ -20,7 +20,17 @@ util::Array<lexer::Token> Compiler::tokenize(std::uint32_t file_id) {
 
 ast::CompilationUnit* Compiler::parse(std::uint32_t file_id) {
     parser::Parser parser(tokenize(file_id), file_id, diagnostics_, arena_);
-    return parser.parse_unit();
+    unit_ = parser.parse_unit();
+    return unit_;
+}
+
+sema::Program* Compiler::analyze(std::uint32_t file_id) {
+    ast::CompilationUnit* unit = parse(file_id);
+    if (!unit) return nullptr;
+    // Sema still runs after parse errors: recovery leaves a usable tree, and
+    // reporting only the first syntax error would hide everything behind it.
+    sema::Checker checker(types_, diagnostics_, arena_);
+    return checker.check(*unit);
 }
 
 }  // namespace khu

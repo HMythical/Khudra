@@ -47,7 +47,8 @@ DiagnosticEngine::Builder DiagnosticEngine::note(SourceLocation location, std::s
     return report(Severity::Note, location, std::move(message));
 }
 
-void DiagnosticEngine::render_one(const Diagnostic& diagnostic, int depth, std::string& out) const {
+void DiagnosticEngine::render_one(const Diagnostic& diagnostic, int depth,
+                                  const SourceLocation* parent, std::string& out) const {
     khu::util::StringBuilder builder;
     builder.set_indent_unit("  ");
     builder.indent(depth);
@@ -60,7 +61,11 @@ void DiagnosticEngine::render_one(const Diagnostic& diagnostic, int depth, std::
     builder.append(severity_name(diagnostic.severity)).append(": ").append(diagnostic.message);
     builder.append('\n');
 
-    std::string_view line = sources_.line_text(diagnostic.location);
+    bool repeats_parent = parent && parent->file_id == diagnostic.location.file_id &&
+                          parent->line == diagnostic.location.line &&
+                          parent->column == diagnostic.location.column;
+    std::string_view line = repeats_parent ? std::string_view() 
+                                           : sources_.line_text(diagnostic.location);
     if (diagnostic.location.valid() && !line.empty()) {
         builder.indent(depth).append("    ").append(line).append('\n');
         builder.indent(depth).append("    ");
@@ -72,12 +77,14 @@ void DiagnosticEngine::render_one(const Diagnostic& diagnostic, int depth, std::
     }
 
     out += builder.str();
-    for (const Diagnostic& child : diagnostic.notes) render_one(child, depth + 1, out);
+    for (const Diagnostic& child : diagnostic.notes) {
+        render_one(child, depth + 1, &diagnostic.location, out);
+    }
 }
 
 std::string DiagnosticEngine::render() const {
     std::string out;
-    for (const Diagnostic& diagnostic : diagnostics_) render_one(diagnostic, 0, out);
+    for (const Diagnostic& diagnostic : diagnostics_) render_one(diagnostic, 0, nullptr, out);
     return out;
 }
 

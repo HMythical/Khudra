@@ -80,3 +80,10 @@ add_test(NAME unit COMMAND khudra_unit_tests)
 # The CLI must report a real diagnostic (with a file:line) for stages that are
 # not implemented yet -- Phase 0 acceptance.
 add_test(NAME cli_help COMMAND khudra help)
+
+# Every sample program must pass semantic analysis.
+file(GLOB KHU_EXAMPLES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/examples/*.khu")
+foreach(example ${KHU_EXAMPLES})
+    get_filename_component(example_name "${example}" NAME_WE)
+    add_test(NAME check_${example_name} COMMAND khudra check "${example}")
+endforeach()
