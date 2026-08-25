@@ -1,0 +1,21 @@
+// The smallest complete Khudra program: an explicit entry point plus a
+// Procedures block that runs the moment the object is materialized.
+bring khu::stdlib;
+
+public class Hello {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    private string greeting = "Hello, Khudra.";
+
+    private Procedures {
+        io.printLine("Procedures runs first -- before the constructor body.");
+    }
+
+    public Hello() {
+        io.printLine(this.greeting);
+    }
+
+    func main() {
+        Hello self = Hello();
+    }
+}

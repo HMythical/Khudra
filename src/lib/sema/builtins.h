@@ -1,0 +1,44 @@
+// Built-in namespaces.
+//
+// `khuStdMath`, `io` and `khu` are classes that are never materialized: their
+// members are static and are reached as `Namespace.member(...)`. Phase 7
+// replaces these hand-registered declarations with real `.khu` sources under
+// lib/ that bind to the same native ids.
+#ifndef KHU_SEMA_BUILTINS_H
+#define KHU_SEMA_BUILTINS_H
+
+#include <cstdint>
+
+#include "sema/symbol.h"
+#include "sema/type.h"
+#include "util/arena.h"
+
+namespace khu::sema {
+
+// Compiler-lowered operations: these never become a call.
+enum class Intrinsic : std::uint32_t {
+    None = 0,
+    ConvertTo,  // khuStdMath.convertTo(<type>, expr)
+};
+
+// Runtime-provided operations, bound by id in the VM.
+enum class Native : std::uint32_t {
+    None = 0,
+    Print,
+    PrintLine,
+    ReadLine,
+    First = Print,
+};
+
+// Registers the built-in namespaces into `program`. Safe to call once per
+// compilation.
+void install_builtins(Program& program, TypeContext& types, util::Arena& arena);
+
+// The name of the arithmetic namespace, used by the checker to spot intrinsics.
+constexpr const char* kMathNamespace = "khuStdMath";
+constexpr const char* kRuntimeNamespace = "khu";
+constexpr const char* kIoNamespace = "io";
+
+}  // namespace khu::sema
+
+#endif  // KHU_SEMA_BUILTINS_H

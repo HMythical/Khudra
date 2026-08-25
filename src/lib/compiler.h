@@ -14,6 +14,9 @@
 #include "diag/source_manager.h"
 #include "lexer/token.h"
 #include "parser/ast.h"
+#include "sema/checker.h"
+#include "sema/symbol.h"
+#include "sema/type.h"
 #include "util/arena.h"
 #include "util/array.h"
 
@@ -34,6 +37,13 @@ public:
     // diagnostics().has_errors().
     ast::CompilationUnit* parse(std::uint32_t file_id);
 
+    // Parses and runs semantic analysis. Returns the program symbol table, or
+    // nullptr when parsing failed outright.
+    sema::Program* analyze(std::uint32_t file_id);
+
+    sema::TypeContext& types() { return types_; }
+    ast::CompilationUnit* unit() { return unit_; }
+
     diag::SourceManager& sources() { return sources_; }
     const diag::SourceManager& sources() const { return sources_; }
     diag::DiagnosticEngine& diagnostics() { return diagnostics_; }
@@ -44,6 +54,8 @@ private:
     diag::SourceManager sources_;
     diag::DiagnosticEngine diagnostics_;
     util::Arena arena_;
+    sema::TypeContext types_;
+    ast::CompilationUnit* unit_ = nullptr;
 };
 
 }  // namespace khu

@@ -16,6 +16,16 @@
 #include "diag/source_location.h"
 #include "util/array.h"
 
+// Sema annotates the tree in place. Only opaque pointers appear here, so the
+// AST stays independent of the checker.
+namespace khu::sema {
+struct ExprInfo;
+struct VarSymbol;
+struct MethodSymbol;
+struct ProcedureSymbol;
+struct ClassSymbol;
+}  // namespace khu::sema
+
 namespace khu::ast {
 
 using diag::SourceLocation;
@@ -111,6 +121,8 @@ const char* binary_op_spelling(BinaryOp op);
 struct Expr {
     ExprKind kind;
     SourceLocation loc;
+    // Filled by Sema: resolved type and target. Null before checking.
+    sema::ExprInfo* info = nullptr;
 
     explicit Expr(ExprKind k, SourceLocation location) : kind(k), loc(location) {}
 
@@ -276,6 +288,7 @@ struct VarDeclStmt : Stmt {
     std::string_view name;
     SourceLocation name_loc;
     Expr* init = nullptr;
+    sema::VarSymbol* symbol = nullptr;
     explicit VarDeclStmt(SourceLocation loc) : Stmt(kKind, loc) {}
 };
 
@@ -366,6 +379,7 @@ struct ParamDecl : Decl {
     static constexpr DeclKind kKind = DeclKind::Param;
     TypeNode* type = nullptr;
     std::string_view name;
+    sema::VarSymbol* symbol = nullptr;
     explicit ParamDecl(SourceLocation loc) : Decl(kKind, loc) {}
 };
 
@@ -377,6 +391,7 @@ struct FieldDecl : Decl {
     std::string_view name;
     SourceLocation name_loc;
     Expr* init = nullptr;
+    sema::VarSymbol* symbol = nullptr;
     explicit FieldDecl(SourceLocation loc) : Decl(kKind, loc) {}
 };
 
@@ -392,6 +407,7 @@ struct MethodDecl : Decl {
     TypeNode* return_type = nullptr;
     bool explicit_void = false;  // written as `-> void`
     BlockStmt* body = nullptr;
+    sema::MethodSymbol* symbol = nullptr;
     explicit MethodDecl(SourceLocation loc) : Decl(kKind, loc) {}
 
     bool is_constructor() const { return form == MethodForm::Constructor; }
@@ -405,6 +421,7 @@ struct ProceduresDecl : Decl {
     bool has_param_list = false;  // `Procedures {` vs `Procedures() {`
     util::Array<ParamDecl*> params;
     BlockStmt* body = nullptr;
+    sema::ProcedureSymbol* symbol = nullptr;
     explicit ProceduresDecl(SourceLocation loc) : Decl(kKind, loc) {}
 };
 
@@ -418,6 +435,7 @@ struct ClassDecl : Decl {
     SourceLocation base_loc;
     // Members in source order, so the pretty printer round-trips the layout.
     util::Array<Decl*> members;
+    sema::ClassSymbol* symbol = nullptr;
     explicit ClassDecl(SourceLocation loc) : Decl(kKind, loc) {}
 };
 
