@@ -18,7 +18,7 @@ namespace khu::bytecode {
 
 constexpr char kMagic[4] = {'K', 'H', 'U', 'B'};
 constexpr std::uint16_t kVersionMajor = 1;
-constexpr std::uint16_t kVersionMinor = 0;
+constexpr std::uint16_t kVersionMinor = 1;
 
 // One typed entry in the constant pool. Integer constants keep their width so
 // the VM never has to guess one.
@@ -64,6 +64,13 @@ struct ClassEntry {
     util::Array<std::uint32_t> vtable;
     std::int32_t constructor = -1;
     std::int32_t procedures = -1;
+    // Synthetic method that evaluates this class's field initializers. It runs
+    // during object linking, base class first, before the Procedures block.
+    std::int32_t field_init = -1;
+    // How many allocation-site arguments this class binds. Both the Procedures
+    // block and the constructor receive the same ones, so one count covers both
+    // (docs/procedures.md).
+    std::uint8_t materialize_argc = 0;
 };
 
 // Bits in MethodEntry::flags.
@@ -72,6 +79,7 @@ enum MethodFlags : std::uint32_t {
     kMethodNative = 1u << 1,
     kMethodConstructor = 1u << 2,
     kMethodProcedures = 1u << 3,
+    kMethodFieldInit = 1u << 4,
 };
 
 // Maps a code offset back to a source position, for VM stack traces.

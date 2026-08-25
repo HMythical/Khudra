@@ -320,27 +320,76 @@ void Checker::build_layouts() {
     }
 }
 
-// The allocation site's arguments feed both the Procedures block and the
-// constructor, so when both declare parameters they must agree.
+namespace {
+
+// The parameter list a class itself declares for materialization: its
+// Procedures block's when it has any, otherwise its constructor's.
+const util::Array<VarSymbol*>* declared_materialization_params(const ClassSymbol& symbol) {
+    if (symbol.procedures && !symbol.procedures->params.empty()) return &symbol.procedures->params;
+    if (symbol.constructor && !symbol.constructor->params.empty()) {
+        return &symbol.constructor->params;
+    }
+    return nullptr;
+}
+
+bool same_parameter_types(const util::Array<VarSymbol*>& left,
+                          const util::Array<VarSymbol*>& right) {
+    if (left.size() != right.size()) return false;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (left[i]->type != right[i]->type) return false;
+    }
+    return true;
+}
+
+diag::SourceLocation materialization_blame(const ClassSymbol& symbol) {
+    if (symbol.procedures && !symbol.procedures->params.empty()) return symbol.procedures->loc;
+    if (symbol.constructor) return symbol.constructor->loc;
+    return symbol.loc;
+}
+
+}  // namespace
+
+// One allocation site supplies the arguments for the whole materialization:
+// every field initializer, Procedures block and constructor in the inheritance
+// chain. So every parameter list involved has to be the same list.
 void Checker::validate_materialization_signatures() {
     for (ClassSymbol* symbol : program_->classes) {
+        // Within one class: the Procedures block and the constructor.
         ProcedureSymbol* procedures = symbol->procedures;
         MethodSymbol* constructor = symbol->constructor;
-        if (!procedures || !constructor) continue;
-        if (procedures->params.empty() || constructor->params.empty()) continue;
-
-        bool same = procedures->params.size() == constructor->params.size();
-        for (std::size_t i = 0; same && i < procedures->params.size(); ++i) {
-            same = procedures->params[i]->type == constructor->params[i]->type;
+        if (procedures && constructor && !procedures->params.empty() &&
+            !constructor->params.empty() &&
+            !same_parameter_types(procedures->params, constructor->params)) {
+            diagnostics_
+                .error(procedures->loc,
+                       "the Procedures block and the constructor of '" +
+                           std::string(symbol->name) +
+                           "' declare different parameters, but both are bound to the same "
+                           "allocation-site arguments")
+                .note(constructor->loc, "the constructor is declared here");
         }
-        if (same) continue;
 
-        diagnostics_
-            .error(procedures->loc,
-                   "the Procedures block and the constructor of '" + std::string(symbol->name) +
-                       "' declare different parameters, but both are bound to the same "
-                       "allocation-site arguments")
-            .note(constructor->loc, "the constructor is declared here");
+        // Across the chain: this class against the nearest ancestor that
+        // declares parameters.
+        const util::Array<VarSymbol*>* own = declared_materialization_params(*symbol);
+        if (!own) continue;
+        for (ClassSymbol* ancestor = symbol->base; ancestor; ancestor = ancestor->base) {
+            const util::Array<VarSymbol*>* inherited = declared_materialization_params(*ancestor);
+            if (!inherited) continue;
+            if (!same_parameter_types(*own, *inherited)) {
+                diagnostics_
+                    .error(materialization_blame(*symbol),
+                           "class '" + std::string(symbol->name) +
+                               "' and its base class '" + std::string(ancestor->name) +
+                               "' declare different materialization parameters")
+                    .note(materialization_blame(*ancestor),
+                          "the base class declares them here")
+                    .note(symbol->loc,
+                          "one allocation site supplies the arguments for the whole chain, so "
+                          "every class in it must take the same ones");
+            }
+            break;
+        }
     }
 }
 
@@ -359,6 +408,33 @@ void Checker::resolve_entry_point(ast::CompilationUnit& unit) {
                 continue;
             }
             program_->main_function = method;
+        }
+    }
+
+    // `main` is an ordinary member, so running it means materializing the class
+    // that declares it -- which only works when materialization needs no
+    // arguments.
+    if (program_->main_function && program_->main_function->owner) {
+        ClassSymbol& owner = *program_->main_function->owner;
+        std::size_t required = 0;
+        diag::SourceLocation blame = owner.loc;
+        if (owner.procedures && !owner.procedures->params.empty()) {
+            required = owner.procedures->params.size();
+            blame = owner.procedures->loc;
+        } else if (owner.constructor && !owner.constructor->params.empty()) {
+            required = owner.constructor->params.size();
+            blame = owner.constructor->loc;
+        }
+        if (required != 0) {
+            diagnostics_
+                .error(program_->main_function->loc,
+                       "class '" + std::string(owner.name) +
+                           "' declares 'main' but needs " + std::to_string(required) +
+                           " allocation argument" + (required == 1 ? "" : "s") +
+                           ", so it cannot be materialized as the entry point")
+                .note(blame, "the allocation-site arguments are bound here")
+                .note(program_->main_function->loc,
+                      "move 'main' to a class that materializes with no arguments");
         }
     }
 

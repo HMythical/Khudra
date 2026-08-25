@@ -75,12 +75,44 @@ KHU_TEST(sema, accepts_a_complete_program) {
         "    method reset() {\n"
         "        this.value = 0;\n"
         "    }\n"
+        "}\n"
         "\n"
+        "public class Program {\n"
         "    func main() {\n"
         "        Counter c = Counter(5);\n"
         "        c.bump(3);\n"
         "    }\n"
         "}\n");
+}
+
+KHU_TEST(sema, rejects_a_main_on_a_class_that_needs_allocation_arguments) {
+    // `main` is an ordinary member, so running it materializes its class --
+    // which only works when materialization takes no arguments.
+    KHU_REJECTS(
+        "public class T {\n"
+        "    private Procedures(int32 seed) { }\n"
+        "    func main() { }\n"
+        "}\n",
+        "cannot be materialized as the entry point");
+}
+
+KHU_TEST(sema, requires_one_materialization_signature_per_inheritance_chain) {
+    KHU_ACCEPTS(
+        "public class Base {\n"
+        "    public Base(int32 seed) { }\n"
+        "}\n"
+        "public class Derived extends Base {\n"
+        "    public Derived(int32 seed) { }\n"
+        "}\n");
+
+    KHU_REJECTS(
+        "public class Base {\n"
+        "    public Base(int32 seed) { }\n"
+        "}\n"
+        "public class Derived extends Base {\n"
+        "    public Derived(bool flag) { }\n"
+        "}\n",
+        "declare different materialization parameters");
 }
 
 KHU_TEST(sema, records_the_entry_point) {

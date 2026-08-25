@@ -1,0 +1,85 @@
+// Inheritance, virtual dispatch and fields.
+//
+// A derived class's layout puts the base's fields first, and its vtable copies
+// the base's entries with overrides swapped in -- so a Shape reference calls
+// the override that belongs to the object it actually points at.
+bring khu::stdlib;
+
+public class Shape {
+    public int32 x = 0;
+    public int32 y = 0;
+
+    public Shape(int32 startX, int32 startY) {
+        this.x = startX;
+        this.y = startY;
+    }
+
+    func area() -> int32 {
+        return 0;
+    }
+
+    func name() -> string {
+        return "shape";
+    }
+
+    // Not overridden anywhere: it still dispatches through the same vtable and
+    // sees the derived object's fields.
+    func describe() {
+        io.print(this.name());
+        io.print(" at ");
+        io.print(this.x);
+        io.print(",");
+        io.print(this.y);
+        io.print(" area ");
+        io.printLine(this.area());
+    }
+}
+
+public class Rectangle extends Shape {
+    public int32 width = 0;
+    public int32 height = 0;
+
+    public Rectangle(int32 startX, int32 startY) {
+        this.x = startX;
+        this.y = startY;
+        this.width = 4;
+        this.height = 3;
+    }
+
+    func area() -> int32 {
+        return khuStdMath.multiply(this.width, this.height);
+    }
+
+    func name() -> string {
+        return "rectangle";
+    }
+}
+
+public class Square extends Rectangle {
+    public Square(int32 startX, int32 startY) {
+        this.x = startX;
+        this.y = startY;
+        this.width = 5;
+        this.height = 5;
+    }
+
+    func name() -> string {
+        return "square";
+    }
+}
+
+public class Shapes {
+    func main() {
+        Shape plain = Shape(1, 1);
+        Shape rectangle = Rectangle(2, 3);
+        Shape square = Square(4, 5);
+
+        plain.describe();
+        rectangle.describe();
+        square.describe();
+
+        // Square inherits Rectangle's area(); the slot was never overridden
+        // again, so the copy carries through two levels.
+        io.printLine(square.area());
+    }
+}

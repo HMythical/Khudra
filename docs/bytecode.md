@@ -107,14 +107,19 @@ never evaluated when the left already decides the answer.
 | Instruction | Operands |
 |---|---|
 | `call` | u16 method index -- non-virtual |
-| `invokevirtual` | u16 vtable slot |
+| `invokevirtual` | u16 vtable slot, u8 argument count |
 | `callnative` | u16 native id, u8 argument count |
 
-The receiver is pushed first, then the arguments; the argument count comes from
-the callee's method entry rather than the instruction. `call` is used where
-dispatch cannot vary -- a `private` member or a constructor -- and
-`invokevirtual` everywhere else: it reads the receiver's `class_id`, indexes
-that class's vtable, and pushes a frame.
+The receiver is pushed first, then the arguments. `call` takes its argument
+count from the callee's method entry; `invokevirtual` carries one, because the
+receiver sits *underneath* the arguments and the slot alone does not say how
+many to skip past to reach it.
+
+`call` is used where dispatch cannot vary -- a `private` member or a
+constructor -- and `invokevirtual` everywhere else: it reads the receiver's
+`class_id`, indexes that class's vtable, and pushes a frame. A subclass's vtable
+is a copy of its base's with overridden slots replaced, so the receiver's own
+table is the whole of dynamic dispatch.
 
 Native ids are listed in `src/lib/bytecode/native.h` and are shared by the
 front end and the VM, so an image written by one loads in the other.
@@ -138,6 +143,30 @@ emits `materialize`.
 
 `halt` stops the interpreter.
 
+## 3.1 Object layout
+
+An object is an `ObjectHeader` followed by one tagged `Value` per field slot:
+
+```
+class_id   uint32   index into the class table
+flags      uint32   bit0 = GC, bit1 = MANUAL, bit2 = materialized
+pin_count  uint32   managed -> manual pins
+size       uint32   total allocation size
+vtable     void*    the runtime class descriptor
+gc_link    Object*  intrusive collector list
+--------------------------------------------
+slot 0 ... one Value per field
+```
+
+`gc_link` lives in the header rather than a side table, so the layout is
+GC-aware from day one and tracing never needs a second lookup. Keeping fields as
+tagged `Value`s means the collector can decide how to treat a slot without one
+either.
+
+`getfield` / `putfield` index slots directly. Slot numbers run inherited fields
+first, then the class's own, so a base reference reads the same slot in a
+derived object.
+
 ## 4. The `.kbc` container
 
 All integers are little-endian.
@@ -157,7 +186,8 @@ constants    u32 count, then per entry:
 
 classes      u32 count, then per class:
                name u32, base i32, flags u32, object_size u32
-               constructor i32, procedures i32
+               constructor i32, procedures i32, field_init i32
+               materialize_argc u8
                fields u32 count, then per field:
                  name u32, type u8, offset u32, class_ref u32,
                  ref_kind u8, is_public u8
@@ -169,6 +199,11 @@ methods      u32 count, then per method:
                code   u32 length + bytes
                lines  u32 count, then (offset u32, line u32, column u32)
 ```
+
+`field_init` names a synthetic method holding the class's field initializers;
+it runs during object linking, base class first. `materialize_argc` is how many
+allocation-site arguments the class binds -- one count, because the Procedures
+block and the constructor receive the same ones.
 
 `ref_kind` is 0 raw, 1 managed-ref, 2 manual-ref -- the reference map the
 collector traces through and the pin bookkeeping uses
@@ -190,11 +225,12 @@ truncated image is reported as truncated.
 
 Both entry forms from KHU-PLAN.md are recorded in the image:
 
-- `main_method >= 0` -- an explicit `func main()`. It runs **without a
-  receiver**, so an explicit entry point does not also materialize its own
-  class; the two forms stay distinct.
+- `main_method >= 0` -- an explicit `func main()`. Khudra has no static
+  context, so `main` is an ordinary member: the VM materializes the class that
+  declares it and then calls `main` on that instance. The checker requires that
+  class to materialize with no arguments.
 - otherwise `root_class >= 0` -- the first top-level class is materialized and
-  its `Procedures` block fires.
+  its `Procedures` block fires. Nothing is called afterwards.
 
 ## 6. Reading a listing
 

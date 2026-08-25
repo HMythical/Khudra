@@ -362,7 +362,8 @@ void Emitter::emit_call(const ast::CallExpr& call, bool discard) {
     if (direct) {
         op_u16(Op::CallDirect, static_cast<std::uint16_t>(method->method_id));
     } else {
-        op_u16(Op::CallVirtual, static_cast<std::uint16_t>(method->vtable_slot));
+        op_u16_u8(Op::CallVirtual, static_cast<std::uint16_t>(method->vtable_slot),
+                  static_cast<std::uint8_t>(call.args.size()));
     }
 
     if (discard && method->return_type && !method->return_type->is_void()) op(Op::Pop);

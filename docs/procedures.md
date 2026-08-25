@@ -55,7 +55,8 @@ Sprite s = Sprite(x, y);
                          allocation-site override token (`manual` / `standard`)
   2. link object         stamp the header (class id, flags, pin 0, size, vtable)
                          and set every field to its default; `null` means
-                         "not instantiated yet"
+                         "not instantiated yet", then run the declared field
+                         initializers, base class first
   3. bind arguments      allocation-site args -> Procedures parameters
   4. run Procedures      <-- "immediately executes when loaded into memory"
                          may call outward, may materialize other objects
@@ -64,6 +65,27 @@ Sprite s = Sprite(x, y);
   6. register live       publish to the GC / manual bookkeeping
   -> return the reference to the allocating site
 ```
+
+### 3.1 Inheritance
+
+Materializing a derived class runs the whole chain, root first, one stage at a
+time:
+
+```
+field initializers   Base, then Derived, then Leaf
+Procedures blocks    Base, then Derived, then Leaf
+constructor bodies   Base, then Derived, then Leaf
+```
+
+Base first at every stage, so a derived class never observes uninitialized
+inherited state, and a derived constructor may overwrite what the base set.
+Running *all* the Procedures blocks before *any* constructor body keeps the
+guarantee that "Procedures runs before the constructor" true for the object as a
+whole, not just per class.
+
+One allocation site supplies the arguments for the entire chain. Every class in
+it that declares materialization parameters must therefore declare the **same**
+ones; the checker rejects a chain that disagrees.
 
 Steps 1-6 are driven by `khu_proc_materialize` in `utils/proc_engine.c`. The
 engine is **C**; every step that needs VM state calls back into the C++ VM

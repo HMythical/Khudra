@@ -1,0 +1,90 @@
+// A small class hierarchy: fields, inheritance, virtual dispatch, and the
+// order the materialization pipeline runs its steps in.
+bring khu::stdlib;
+
+public class Animal {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    public string name = "unnamed";
+    public int32 legs = 0;
+
+    private Procedures(int32 legCount) {
+        io.printLine("Procedures: an Animal is being loaded into memory");
+    }
+
+    public Animal(int32 legCount) {
+        this.legs = legCount;
+        this.name = "animal";
+    }
+
+    func speak() -> string {
+        return "...";
+    }
+
+    func legCount() -> int32 {
+        return this.legs;
+    }
+
+    // Never overridden: it still reaches the override of speak() through the
+    // receiver's own vtable.
+    func introduce() {
+        io.print(this.name);
+        io.print(" says ");
+        io.print(this.speak());
+        io.print(" and has ");
+        io.print(this.legCount());
+        io.printLine(" legs");
+    }
+}
+
+public class Dog extends Animal {
+    public bool goodBoy = true;
+
+    public Dog(int32 legCount) {
+        this.legs = legCount;
+        this.name = "dog";
+    }
+
+    func speak() -> string {
+        return "woof";
+    }
+}
+
+public class Puppy extends Dog {
+    public Puppy(int32 legCount) {
+        this.legs = legCount;
+        this.name = "puppy";
+    }
+
+    func speak() -> string {
+        return "yip";
+    }
+}
+
+public class Zoo {
+    public int32 visits = 0;
+
+    func visit(Animal guest) {
+        guest.introduce();
+        this.visits = khuStdMath.add(this.visits, 1);
+    }
+
+    func main() {
+        Animal plain = Animal(4);
+        Animal dog = Dog(4);
+        Animal puppy = Puppy(4);
+
+        this.visit(plain);
+        this.visit(dog);
+        this.visit(puppy);
+
+        // Puppy inherits legCount() from Animal through two levels of copying.
+        io.printLine(puppy.legCount());
+        io.printLine(this.visits);
+
+        // A base reference holding a derived object still reads the base slots
+        // at the same offsets.
+        io.printLine(dog.name);
+        io.printLine(plain.speak());
+    }
+}

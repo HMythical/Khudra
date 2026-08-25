@@ -160,6 +160,7 @@ std::string disassemble_instruction(const Module& module, const MethodEntry& met
                 }
             } else {
                 out.append_uint(second);
+                if (op == Op::CallVirtual) out.append("    ; slot, argc");
             }
             break;
         }

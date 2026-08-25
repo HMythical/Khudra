@@ -224,9 +224,13 @@ Both forms are supported and `khudra run` dispatches accordingly:
 2. **root-class materialization** -- when no `main` exists, the first top-level
    class is materialized and its `Procedures` block fires.
 
-`main` runs **without a receiver**, so declaring one does not also materialize
-its own class -- the two forms stay distinct. A program that wants an instance
-materializes it explicitly.
+Khudra has no static context, so `main` is an ordinary member: running it
+materializes the class that declares it -- field initializers, `Procedures`,
+constructor -- and then calls `main` on that instance. That class must therefore
+materialize with **no** allocation arguments, which the checker enforces.
+
+Root-class materialization is the other form: the first top-level class is
+materialized and its `Procedures` block fires, with nothing called afterwards.
 
 ## 9. Built-in namespaces
 

@@ -128,14 +128,40 @@ void Emitter::patch_jump(std::size_t site) {
 // Module assembly
 // ---------------------------------------------------------------------------
 
+bool Emitter::needs_field_initializer(const sema::ClassSymbol& symbol) const {
+    for (const sema::VarSymbol* field : symbol.fields) {
+        if (field->field_decl && field->field_decl->init) return true;
+    }
+    return false;
+}
+
 void Emitter::assign_method_indices() {
     std::uint32_t next = 0;
+    field_init_indices_.resize(program_.classes.size(), -1);
     for (sema::ClassSymbol* symbol : program_.classes) {
         for (sema::MethodSymbol* method : symbol->methods) method->method_id = next++;
         if (symbol->constructor) symbol->constructor->method_id = next++;
         if (symbol->procedures) symbol->procedures->method_id = next++;
+        if (needs_field_initializer(*symbol)) {
+            field_init_indices_[symbol->class_id] = static_cast<std::int32_t>(next++);
+        }
     }
     module_->methods.resize(next);
+}
+
+// How many allocation-site arguments a class binds. One site supplies them to
+// every Procedures block and constructor in the chain, and the checker has
+// already required those lists to agree, so the nearest declared one wins.
+std::uint8_t materialization_argc(const sema::ClassSymbol& symbol) {
+    for (const sema::ClassSymbol* current = &symbol; current; current = current->base) {
+        if (current->procedures && !current->procedures->params.empty()) {
+            return static_cast<std::uint8_t>(current->procedures->params.size());
+        }
+        if (current->constructor && !current->constructor->params.empty()) {
+            return static_cast<std::uint8_t>(current->constructor->params.size());
+        }
+    }
+    return 0;
 }
 
 void Emitter::emit_classes() {
@@ -151,6 +177,8 @@ void Emitter::emit_classes() {
             symbol->constructor ? static_cast<std::int32_t>(symbol->constructor->method_id) : -1;
         entry.procedures =
             symbol->procedures ? static_cast<std::int32_t>(symbol->procedures->method_id) : -1;
+        entry.field_init = field_init_indices_[symbol->class_id];
+        entry.materialize_argc = materialization_argc(*symbol);
 
         for (sema::VarSymbol* field : symbol->layout) {
             bytecode::FieldEntry slot;
@@ -185,6 +213,7 @@ bool Emitter::emit(ast::CompilationUnit& unit, std::string_view source_path,
         for (sema::MethodSymbol* method : symbol->methods) emit_method(*method);
         if (symbol->constructor) emit_method(*symbol->constructor);
         if (symbol->procedures) emit_procedures(*symbol->procedures);
+        if (field_init_indices_[symbol->class_id] >= 0) emit_field_initializer(*symbol);
     }
 
     out.main_method =
@@ -212,7 +241,6 @@ void Emitter::emit_method(sema::MethodSymbol& method) {
     entry.flags = method.is_constructor()
                       ? static_cast<std::uint32_t>(bytecode::kMethodConstructor)
                       : 0u;
-    if (program_.main_function == &method) entry.flags |= bytecode::kMethodStatic;
     entry.param_count = static_cast<std::uint8_t>(method.params.size());
     entry.frame_size = static_cast<std::uint16_t>(method.frame_size);
     entry.return_type = tag_of(method.return_type);
@@ -221,6 +249,37 @@ void Emitter::emit_method(sema::MethodSymbol& method) {
 
     buffer_ = nullptr;
     current_return_ = nullptr;
+}
+
+// One `this.field = <initializer>` per declared initializer, in source order.
+// The VM runs these base class first, so a derived class never sees an
+// uninitialized inherited slot.
+void Emitter::emit_field_initializer(sema::ClassSymbol& symbol) {
+    CodeBuffer buffer;
+    buffer_ = &buffer;
+    current_return_ = nullptr;
+
+    for (sema::VarSymbol* field : symbol.fields) {
+        if (!field->field_decl || !field->field_decl->init) continue;
+        mark(field->loc);
+        op(Op::LoadThis);
+        emit_expr(field->field_decl->init);
+        op_u16(Op::PutField, static_cast<std::uint16_t>(field->slot));
+    }
+    op(Op::Return);
+
+    bytecode::MethodEntry& entry =
+        module_->methods[static_cast<std::size_t>(field_init_indices_[symbol.class_id])];
+    entry.name = module_->intern_string("<fieldinit>");
+    entry.owner_class = symbol.class_id;
+    entry.flags = static_cast<std::uint32_t>(bytecode::kMethodFieldInit);
+    entry.param_count = 0;
+    entry.frame_size = 0;
+    entry.return_type = TypeTag::Void;
+    entry.code = std::move(buffer.code);
+    entry.lines = std::move(buffer.lines);
+
+    buffer_ = nullptr;
 }
 
 void Emitter::emit_procedures(sema::ProcedureSymbol& procedures) {
