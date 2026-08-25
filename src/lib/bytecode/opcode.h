@@ -110,9 +110,11 @@ enum class OperandFormat : std::uint8_t {
     X(JumpIfTrue,   "jmpt",          OperandFormat::I32)                   \
     X(Return,       "ret",           OperandFormat::None)                  \
     X(ReturnValue,  "retval",        OperandFormat::None)                  \
-    /* calls -- argument count comes from the callee's method entry */      \
+    /* calls. invokevirtual carries its argument count because the receiver \
+       sits underneath the arguments and the slot alone does not say how many \
+       to skip past to reach it. */                                          \
     X(CallDirect,   "call",          OperandFormat::U16)                   \
-    X(CallVirtual,  "invokevirtual", OperandFormat::U16)                   \
+    X(CallVirtual,  "invokevirtual", OperandFormat::U16U8)                 \
     X(CallNative,   "callnative",    OperandFormat::U16U8)                 \
     /* memory */                                                           \
     X(Materialize,  "materialize",   OperandFormat::U16U8)                 \

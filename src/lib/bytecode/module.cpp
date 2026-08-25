@@ -246,6 +246,8 @@ std::string serialize(const Module& module) {
         put_u32(out, entry.object_size);
         put_i32(out, entry.constructor);
         put_i32(out, entry.procedures);
+        put_i32(out, entry.field_init);
+        put_u8(out, entry.materialize_argc);
 
         put_u32(out, static_cast<std::uint32_t>(entry.fields.size()));
         for (const FieldEntry& field : entry.fields) {
@@ -334,6 +336,8 @@ bool deserialize(std::string_view bytes, Module& out, std::string& error) {
         entry.object_size = reader.u32();
         entry.constructor = reader.i32();
         entry.procedures = reader.i32();
+        entry.field_init = reader.i32();
+        entry.materialize_argc = reader.u8();
 
         std::uint32_t field_count = reader.u32();
         for (std::uint32_t f = 0; f < field_count && reader.ok(); ++f) {

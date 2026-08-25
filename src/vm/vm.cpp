@@ -41,6 +41,14 @@ Value normalize_float(TypeTag tag, double value) {
 
 Vm::Vm(const bytecode::Module& module) : module_(module) {}
 
+bool Vm::prepare() {
+    if (prepared_) return true;
+    std::string error;
+    if (!classes_.load(module_, error)) return trap("cannot load the class table: " + error);
+    prepared_ = true;
+    return true;
+}
+
 Vm::~Vm() {
     for (std::string* text : runtime_strings_) delete text;
 }
@@ -462,18 +470,88 @@ bool Vm::execute(Frame& frame, Value& result) {
                 push(frame.receiver);
                 break;
 
-            case Op::GetField:
-            case Op::PutField:
-            case Op::Materialize:
+            case Op::GetField: {
+                std::uint16_t slot = read_u16(frame);
+                Value receiver = pop();
+                if (receiver.is_null_reference()) {
+                    return trap("cannot read a field of null: the object is not instantiated yet");
+                }
+                if (receiver.tag != TypeTag::Ref || !receiver.as_ref) {
+                    return trap("getfield expects an object, found " +
+                                std::string(bytecode::type_tag_name(receiver.tag)));
+                }
+                Object* object = receiver.as_ref;
+                auto* type = static_cast<RuntimeClass*>(object->header.vtable);
+                if (!type || slot >= type->slot_count) {
+                    return trap("field slot " + std::to_string(slot) + " is out of range");
+                }
+                push(object->slots()[slot]);
+                break;
+            }
+
+            case Op::PutField: {
+                std::uint16_t slot = read_u16(frame);
+                Value value = pop();
+                Value receiver = pop();
+                if (receiver.is_null_reference()) {
+                    return trap("cannot assign a field of null: the object is not instantiated "
+                                "yet");
+                }
+                if (receiver.tag != TypeTag::Ref || !receiver.as_ref) {
+                    return trap("putfield expects an object, found " +
+                                std::string(bytecode::type_tag_name(receiver.tag)));
+                }
+                Object* object = receiver.as_ref;
+                auto* type = static_cast<RuntimeClass*>(object->header.vtable);
+                if (!type || slot >= type->slot_count) {
+                    return trap("field slot " + std::to_string(slot) + " is out of range");
+                }
+                // A managed slot taking a manual reference is where the pin
+                // write barrier goes; Phase 5 attaches it here.
+                object->slots()[slot] = value;
+                break;
+            }
+
+            case Op::Materialize: {
+                std::uint16_t class_id = read_u16(frame);
+                auto strategy = static_cast<bytecode::StrategyByte>(read_u8(frame));
+                Value created;
+                if (!materialize(class_id, strategy, created)) return false;
+                push(created);
+                break;
+            }
+
             case Op::Alloc:
-            case Op::ManualAlloc:
+            case Op::ManualAlloc: {
+                std::uint16_t class_id = read_u16(frame);
+                RuntimeClass* type = classes_.at(class_id);
+                if (!type) return trap("unknown class id " + std::to_string(class_id));
+                Object* object = heap_.allocate(*type, op == Op::ManualAlloc);
+                if (!object) return trap("out of memory allocating '" + std::string(type->name) +
+                                         "'");
+                push(Value::make_ref(object));
+                break;
+            }
+
             case Op::Free:
+                if (!release_manual(pop())) return false;
+                break;
+
             case Op::Pin:
-            case Op::Unpin:
-                // Object memory arrives in Phase 4 (objects and dispatch) and
-                // Phase 5 (the collector and manual arenas).
-                return trap(std::string("'") + bytecode::mnemonic(op) +
-                            "' needs runtime objects, which arrive in Phase 4 (see KHU-PLAN.md)");
+            case Op::Unpin: {
+                Value target = pop();
+                if (target.is_null_reference()) break;  // nothing to pin
+                if (target.tag != TypeTag::Ref || !target.as_ref) {
+                    return trap(std::string(bytecode::mnemonic(op)) + " expects an object");
+                }
+                std::uint32_t& count = target.as_ref->header.pin_count;
+                if (op == Op::Pin) {
+                    ++count;
+                } else if (count > 0) {
+                    --count;
+                }
+                break;
+            }
 
             case Op::Add:
             case Op::Sub:
@@ -584,45 +662,37 @@ bool Vm::execute(Frame& frame, Value& result) {
 
             case Op::CallVirtual: {
                 std::uint16_t slot = read_u16(frame);
-                // The receiver is under the arguments, and the number of
-                // arguments depends on which method the slot resolves to, so
-                // resolve the class first.
-                std::uint32_t class_id = frame.method->owner_class;
-                // Peek for the receiver once the argument count is known: try
-                // the caller's own class table entry, which has the same shape
-                // for every subclass.
-                const bytecode::ClassEntry* owner =
-                    module_.class_at(static_cast<std::int32_t>(class_id));
-                if (!owner || slot >= owner->vtable.size()) {
-                    return trap("vtable slot " + std::to_string(slot) + " is out of range");
-                }
-                const bytecode::MethodEntry* shape =
-                    module_.method_at(static_cast<std::int32_t>(owner->vtable[slot]));
-                if (!shape) return trap("vtable slot " + std::to_string(slot) + " is empty");
+                std::uint8_t argc = read_u8(frame);
 
+                // The receiver sits under the arguments; lift them off to reach
+                // it, then dispatch on its class.
                 util::Array<Value> args;
-                for (std::uint8_t i = 0; i < shape->param_count; ++i) args.push(pop());
+                for (std::uint8_t i = 0; i < argc; ++i) args.push(pop());
                 Value receiver = pop();
 
-                // With a real object the vtable comes from its class; the
-                // caller's own class is the fallback for a self-call before
-                // objects exist (Phase 4 makes a null receiver an error).
-                if (receiver.tag == TypeTag::Ref && receiver.as_ref) {
-                    class_id = receiver.as_ref->header.class_id;
-                    owner = module_.class_at(static_cast<std::int32_t>(class_id));
-                    if (!owner || slot >= owner->vtable.size()) {
-                        return trap("vtable slot " + std::to_string(slot) +
-                                    " is out of range for the receiver's class");
-                    }
+                if (receiver.is_null_reference()) {
+                    return trap("cannot call a method on null: the object is not instantiated "
+                                "yet");
+                }
+                if (receiver.tag != TypeTag::Ref || !receiver.as_ref) {
+                    return trap("a method call expects an object, found " +
+                                std::string(bytecode::type_tag_name(receiver.tag)));
                 }
 
-                auto target = static_cast<std::int32_t>(owner->vtable[slot]);
-                const bytecode::MethodEntry* callee = module_.method_at(target);
-                if (!callee) return trap("vtable slot " + std::to_string(slot) + " is empty");
+                // A derived override replaced the inherited entry when the
+                // subclass's vtable was built, so the receiver's own table is
+                // the whole of dynamic dispatch.
+                auto* type = static_cast<RuntimeClass*>(receiver.as_ref->header.vtable);
+                if (!type || slot >= type->vtable.size()) {
+                    return trap("vtable slot " + std::to_string(slot) +
+                                " is out of range for class '" +
+                                (type ? std::string(type->name) : std::string("?")) + "'");
+                }
+                const bytecode::MethodEntry* callee = type->vtable[slot];
 
                 for (std::size_t i = args.size(); i > 0; --i) push(args[i - 1]);
                 Value returned;
-                if (!call_method(target, receiver, returned)) return false;
+                if (!call_method(type->vtable_indices[slot], receiver, returned)) return false;
                 if (callee->return_type != TypeTag::Void) push(returned);
                 break;
             }
@@ -645,20 +715,128 @@ bool Vm::execute(Frame& frame, Value& result) {
 }
 
 // ---------------------------------------------------------------------------
+// Materialization
+// ---------------------------------------------------------------------------
+
+// The inheritance chain from the root down to `type`. Every stage of
+// materialization walks it in this order, so a derived class never observes
+// uninitialized inherited state.
+static void collect_chain(RuntimeClass& type, util::Array<RuntimeClass*>& out) {
+    if (type.base) collect_chain(*type.base, out);
+    out.push(&type);
+}
+
+bool Vm::run_field_initializers(RuntimeClass& type, Object* object) {
+    if (type.base && !run_field_initializers(*type.base, object)) return false;
+    if (type.field_init_index < 0) return true;
+    Value ignored;
+    return call_method(type.field_init_index, Value::make_ref(object), ignored);
+}
+
+bool Vm::materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out) {
+    RuntimeClass* type = classes_.at(class_id);
+    if (!type) return trap("unknown class id " + std::to_string(class_id));
+
+    bool manual = strategy == bytecode::StrategyByte::Manual ||
+                  (strategy == bytecode::StrategyByte::ClassDefault && type->manual);
+
+    // The allocation-site arguments are on the stack; both the Procedures block
+    // and the constructor receive the same ones.
+    util::Array<Value> args;
+    for (std::uint8_t i = 0; i < type->materialize_argc; ++i) args.push(pop());
+
+    // 1. allocate per strategy, 2. link the object (header + defaults)
+    Object* object = heap_.allocate(*type, manual);
+    if (!object) return trap("out of memory materializing '" + std::string(type->name) + "'");
+    Value reference = Value::make_ref(object);
+
+    util::Array<RuntimeClass*> chain;
+    collect_chain(*type, chain);
+
+    // 3. field initializers, part of linking
+    if (!run_field_initializers(*type, object)) return false;
+
+    // 4. Procedures blocks, base class first. Every block in the chain runs
+    //    before any constructor body does, which is what "Procedures runs
+    //    before the constructor" means for an inherited class.
+    //    Phase 6 moves this loop into the C engine.
+    for (RuntimeClass* step : chain) {
+        if (step->procedures_index < 0) continue;
+        for (std::size_t i = args.size(); i > 0; --i) push(args[i - 1]);
+        Value ignored;
+        if (!call_method(step->procedures_index, reference, ignored)) return false;
+    }
+
+    // 5. constructor bodies, base class first: the base sets up its own fields
+    //    and the derived class may then overwrite them.
+    for (RuntimeClass* step : chain) {
+        if (step->constructor_index < 0) continue;
+        for (std::size_t i = args.size(); i > 0; --i) push(args[i - 1]);
+        Value ignored;
+        if (!call_method(step->constructor_index, reference, ignored)) return false;
+    }
+
+    // 6. register the object as live and hand the reference back
+    object->header.flags |= kObjectMaterialized;
+    out = reference;
+    return true;
+}
+
+bool Vm::release_manual(Value target) {
+    if (target.is_null_reference()) {
+        return trap("cannot free null: the object is not instantiated yet");
+    }
+    if (target.tag != TypeTag::Ref || !target.as_ref) {
+        return trap("free expects a manually allocated object, found " +
+                    std::string(bytecode::type_tag_name(target.tag)));
+    }
+
+    Object* object = target.as_ref;
+    auto* type = static_cast<RuntimeClass*>(object->header.vtable);
+    std::string name = type ? std::string(type->name) : std::string("object");
+
+    if (!object->is_manual()) {
+        return trap("cannot free '" + name + "': it is garbage collected");
+    }
+    if (object->header.pin_count > 0) {
+        return trap("cannot free '" + name + "': it is pinned by " +
+                    std::to_string(object->header.pin_count) + " managed slot" +
+                    (object->header.pin_count == 1 ? "" : "s"));
+    }
+    if (!heap_.free_manual(object)) {
+        return trap("cannot free '" + name + "': it was already released");
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Entry dispatch
 // ---------------------------------------------------------------------------
 
 bool Vm::run() {
+    if (!prepare()) return false;
+
     if (module_.main_method >= 0) {
+        const bytecode::MethodEntry* main = module_.method_at(module_.main_method);
+        if (!main) return trap("the image names a missing entry point");
+
+        // `main` is an ordinary member -- Khudra has no static context -- so
+        // the class that declares it is materialized and main runs on that
+        // instance.
+        Value receiver;
+        if (!materialize(main->owner_class, bytecode::StrategyByte::ClassDefault, receiver)) {
+            return false;
+        }
         Value result;
-        // `main` runs without a receiver: the two entry forms stay distinct, so
-        // an explicit main does not also materialize its own class.
-        return call_method(module_.main_method, Value::make_null(), result);
+        return call_method(module_.main_method, receiver, result);
     }
 
     if (module_.root_class >= 0) {
-        return trap("root-class materialization needs the Procedure engine, which arrives in "
-                    "Phase 6 (see KHU-PLAN.md)");
+        // The other entry form: materialize the first top-level class and let
+        // its Procedures block fire.
+        Value root;
+        return materialize(static_cast<std::uint32_t>(module_.root_class),
+                           bytecode::StrategyByte::ClassDefault, root);
     }
 
     return trap("this image has no entry point");

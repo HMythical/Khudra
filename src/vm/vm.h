@@ -11,6 +11,8 @@
 
 #include "bytecode/module.h"
 #include "util/array.h"
+#include "vm/class_table.h"
+#include "vm/heap.h"
 #include "vm/object.h"
 #include "vm/value.h"
 
@@ -22,6 +24,10 @@ public:
     Vm(const Vm&) = delete;
     Vm& operator=(const Vm&) = delete;
     ~Vm();
+
+    // Loads the class table. run() does this itself; call it directly when
+    // invoking individual methods.
+    bool prepare();
 
     // Runs the image's entry point: `main` when it has one, otherwise
     // root-class materialization. Returns false and sets error() on a trap.
@@ -40,6 +46,8 @@ public:
     void set_input(std::string input) { input_ = std::move(input); }
 
     std::uint64_t instructions_executed() const { return instructions_; }
+    const Heap& heap() const { return heap_; }
+    const ClassTable& classes() const { return classes_; }
 
 private:
     struct Frame {
@@ -63,6 +71,12 @@ private:
     bool call_method(std::int32_t method_index, Value receiver, Value& result);
     bool call_native(std::uint32_t native_id, std::uint8_t argc);
 
+    // The materialization pipeline (docs/procedures.md). Phase 6 moves the
+    // driving loop into the C engine; the steps themselves live here.
+    bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
+    bool run_field_initializers(RuntimeClass& type, Object* object);
+    bool release_manual(Value target);
+
     // Raises a runtime error carrying the current source position and a stack
     // trace, and unwinds.
     bool trap(std::string message);
@@ -75,6 +89,9 @@ private:
     bool convert(TypeTag from, TypeTag to);
 
     const bytecode::Module& module_;
+    ClassTable classes_;
+    Heap heap_;
+    bool prepared_ = false;
     util::Array<Value> stack_;
     util::Array<Frame*> frames_;
     std::string error_;

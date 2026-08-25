@@ -37,6 +37,10 @@ private:
     void emit_classes();
     void emit_method(sema::MethodSymbol& method);
     void emit_procedures(sema::ProcedureSymbol& procedures);
+    // Synthetic method holding a class's field initializers; it runs during
+    // object linking, before the Procedures block.
+    void emit_field_initializer(sema::ClassSymbol& symbol);
+    bool needs_field_initializer(const sema::ClassSymbol& symbol) const;
 
     bytecode::TypeTag tag_of(const sema::Type* type) const;
 
@@ -68,6 +72,9 @@ private:
     void emit_load_var(const sema::VarSymbol& var, const ast::Expr* object);
 
     void error(diag::SourceLocation loc, std::string message);
+
+    // Module index of each class's synthetic field initializer, or -1.
+    util::Array<std::int32_t> field_init_indices_;
 
     sema::Program& program_;
     diag::DiagnosticEngine& diagnostics_;
