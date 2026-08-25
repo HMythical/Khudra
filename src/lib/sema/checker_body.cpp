@@ -305,6 +305,14 @@ void Checker::check_local(ast::VarDeclStmt& decl) {
             report_mismatch(decl.init->loc, init, declared,
                             "in the initializer of '" + std::string(decl.name) + "'");
         }
+        // Remember an allocation-site override so `free` judges by the strategy
+        // the object was actually allocated under.
+        const auto* site = decl.init->as<ast::CallExpr>();
+        if (site && site->has_strategy_token && decl.init->info &&
+            decl.init->info->is_allocation) {
+            symbol->has_site_strategy = true;
+            symbol->site_strategy = decl.init->info->alloc_strategy;
+        }
     }
 
     decl.symbol = declare_variable(symbol, decl.name_loc);
@@ -324,24 +332,34 @@ void Checker::check_free(ast::FreeStmt& statement) {
     }
 
     const ClassSymbol* target = type->class_symbol;
-    if (target && target->strategy != Strategy::Manual) {
+    VarSymbol* local = statement.target->info ? statement.target->info->var : nullptr;
+
+    // An allocation-site token wins over the class default, so a collected
+    // class allocated with `manual` is releasable and vice versa.
+    Strategy effective = target ? target->strategy : Strategy::Gc;
+    bool from_site = local && local->has_site_strategy;
+    if (from_site) effective = local->site_strategy;
+
+    if (effective != Strategy::Manual) {
         auto builder = diagnostics_.error(
             statement.target->loc, "cannot " + std::string(verb) + " '" +
-                                       std::string(target->name) +
+                                       (target ? std::string(target->name) : type->display()) +
                                        "': it is garbage collected");
-        if (target->strategy_field) {
+        if (from_site) {
+            builder.note(local->loc,
+                         "this allocation site selects 'standard', which overrides the class "
+                         "default");
+        } else if (target && target->strategy_field) {
             builder.note(target->strategy_field->loc,
                          "its strategy field selects setStandard(); use setManual(), or drop the "
                          "reference and let the collector reclaim it");
-        } else {
+        } else if (target) {
             builder.note(target->loc,
                          "a class with no MemoryAllocationTypeObject field is collected by "
                          "default");
         }
         return;
     }
-
-    VarSymbol* local = statement.target->info ? statement.target->info->var : nullptr;
 
     if (const PinTracker::PinSite* pin = pins_.find_pin(local)) {
         diagnostics_

@@ -1,6 +1,8 @@
 // Phase 0: the C runtime links cleanly through the extern "C" boundary.
 #include "test_harness.h"
 
+#include <cstdint>
+
 extern "C" {
 #include "alloc.h"
 #include "bool_impl.h"
@@ -33,13 +35,26 @@ KHU_TEST(c_runtime, bool_representation_is_canonical) {
     KHU_CHECK_EQ(std::string(khu_bool_name(KHU_TRUE)), std::string("true"));
 }
 
-KHU_TEST(c_runtime, procedure_engine_abi_is_reachable) {
-    // Phase 0 only guarantees the ABI links and reports "not implemented".
+KHU_TEST(c_runtime, procedure_engine_refuses_to_run_without_a_host) {
+    // The engine is pure C and holds no VM state: with no host installed it
+    // reports that rather than dereferencing anything.
     KHU_CHECK_EQ(khu_proc_engine_ready(), 0);
+    KHU_CHECK(khu_proc_engine_host() == nullptr);
+
     KhuObject* object = reinterpret_cast<KhuObject*>(0x1);
     KhuProcStatus status = khu_proc_materialize(0, KHU_STRATEGY_GC, 0, &object);
     KHU_CHECK(status == KHU_PROC_NOT_IMPLEMENTED);
     KHU_CHECK(object == nullptr);
     KHU_CHECK_EQ(std::string(khu_proc_status_name(status)),
                  std::string("procedure engine not implemented"));
+    KHU_CHECK_EQ(khu_proc_depth(), static_cast<std::uint32_t>(0));
+}
+
+KHU_TEST(c_runtime, procedure_engine_names_every_status) {
+    KHU_CHECK_EQ(std::string(khu_proc_status_name(KHU_PROC_OK)), std::string("ok"));
+    KHU_CHECK_EQ(std::string(khu_proc_status_name(KHU_PROC_DEPTH_EXCEEDED)),
+                 std::string("materialization nested too deeply"));
+    KHU_CHECK_EQ(std::string(khu_proc_status_name(KHU_PROC_CONSTRUCTOR_FAILED)),
+                 std::string("constructor failed"));
+    KHU_CHECK(KHU_PROC_MAX_DEPTH > 0);
 }
