@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/khudra-logo.png" width="200" alt="Khudra Logo">
+</p>
+
 # Khudra
 
 An object-oriented language with a hand-written compiler and a bytecode VM.
