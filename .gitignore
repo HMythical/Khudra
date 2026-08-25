@@ -1,0 +1,26 @@
+# CMake / build outputs (build/ contains tracked placeholder docs, so scope patterns)
+build/CMakeCache.txt
+build/CMakeFiles/
+build/CMakeScratch/
+build/CMakeTmp/
+build/cmake_install.cmake
+build/Makefile
+build/*.cmake
+build/cmake-build-*/
+build/Testing/
+build/khudra
+build/khudra[._]*
+
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.exe
+
+# Khudra bytecode
+*.kbc
