@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "bytecode/native.h"
+#include "bytecode/verifier.h"
 #include "vm/proc_host.h"
 
 namespace khu::vm {
@@ -44,6 +45,14 @@ Vm::Vm(const bytecode::Module& module) : module_(module) {}
 
 bool Vm::prepare() {
     if (prepared_) return true;
+
+    // The interpreter is written assuming its operands are in range, so the
+    // image is checked once here rather than on every instruction.
+    std::string report;
+    if (!bytecode::verify(module_, report)) {
+        return trap("this bytecode image is not valid:\n" + report);
+    }
+
     std::string error;
     if (!classes_.load(module_, error)) return trap("cannot load the class table: " + error);
     collector_.set_root_source(this);

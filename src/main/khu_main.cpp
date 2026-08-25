@@ -16,6 +16,7 @@
 
 #include "bytecode/disassembler.h"
 #include "bytecode/module.h"
+#include "bytecode/verifier.h"
 #include "compiler.h"
 #include "diag/diagnostic.h"
 #include "diag/source_manager.h"
@@ -223,6 +224,13 @@ int run_stage(const Options& options) {
 
     switch (options.command) {
         case Command::Disasm: {
+            // A listing is a debugging aid, so a bad image is still worth
+            // printing -- with the reason it would be refused at the top.
+            std::string report;
+            if (!khu::bytecode::verify(module, report)) {
+                std::fprintf(stderr, "khudra: this image would be refused at run time:\n%s",
+                             report.c_str());
+            }
             std::string text = khu::bytecode::disassemble(module);
             std::fwrite(text.data(), 1, text.size(), stdout);
             return 0;
@@ -247,8 +255,11 @@ int run_stage(const Options& options) {
             break;
     }
 
-    std::fprintf(stderr, "khudra: '%s' is not implemented yet\n", options.command_name.c_str());
-    return 1;
+    // Every command that reaches here is handled above; this is a guard, not a
+    // stage that is still missing.
+    std::fprintf(stderr, "khudra: internal error: no handler for '%s'\n",
+                 options.command_name.c_str());
+    return 70;
 }
 
 }  // namespace
