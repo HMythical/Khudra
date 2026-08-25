@@ -68,10 +68,10 @@ void print_usage(std::FILE* stream) {
                  "\n"
                  "commands:\n"
                  "  compile <file.khu>   compile a source file to bytecode\n"
-                 "  run     <file.khu>   compile in memory and execute\n"
+                 "  run     <file>       execute a .khu source or a .kbc image\n"
                  "  check   <file.khu>   parse and typecheck only\n"
                  "  emit-bc <file.khu>   write a .kbc bytecode image\n"
-                 "  disasm  <file.kbc>   disassemble a bytecode image\n"
+                 "  disasm  <file>       disassemble a .khu source or a .kbc image\n"
                  "  version              print the toolchain version\n"
                  "  help                 print this message\n"
                  "\n"
@@ -152,26 +152,33 @@ std::string default_output_path(const std::string& input) {
     return input + ".kbc";
 }
 
-// Disassembling an existing image never touches the front end.
-int disassemble_image(const std::string& path, const std::string& bytes) {
-    khu::bytecode::Module module;
-    std::string error;
-    if (!khu::bytecode::deserialize(bytes, module, error)) {
-        std::fprintf(stderr, "khudra: %s: %s\n", path.c_str(), error.c_str());
+// Executes a loaded image.
+int execute(const khu::bytecode::Module& module) {
+    khu::vm::Vm vm(module);
+    if (!vm.run()) {
+        std::fwrite(vm.error().data(), 1, vm.error().size(), stderr);
         return 1;
     }
-    std::string text = khu::bytecode::disassemble(module);
-    std::fwrite(text.data(), 1, text.size(), stdout);
     return 0;
 }
 
 int run_stage(const Options& options) {
-    // A .kbc image is loaded directly; anything else goes through the compiler.
-    if (options.command == Command::Disasm) {
+    // A .kbc image is already compiled: `run` and `disasm` take it directly
+    // rather than looking for a source file that may not be there any more.
+    if (options.command == Command::Disasm || options.command == Command::Run) {
         std::string bytes;
         if (khu::util::read_file(options.input, bytes) == khu::util::FileError::None &&
             bytes.size() >= 4 && std::memcmp(bytes.data(), khu::bytecode::kMagic, 4) == 0) {
-            return disassemble_image(options.input, bytes);
+            khu::bytecode::Module module;
+            std::string error;
+            if (!khu::bytecode::deserialize(bytes, module, error)) {
+                std::fprintf(stderr, "khudra: %s: %s\n", options.input.c_str(), error.c_str());
+                return 1;
+            }
+            if (options.command == Command::Run) return execute(module);
+            std::string text = khu::bytecode::disassemble(module);
+            std::fwrite(text.data(), 1, text.size(), stdout);
+            return 0;
         }
     }
 
@@ -233,14 +240,8 @@ int run_stage(const Options& options) {
             return 0;
         }
 
-        case Command::Run: {
-            khu::vm::Vm vm(module);
-            if (!vm.run()) {
-                std::fwrite(vm.error().data(), 1, vm.error().size(), stderr);
-                return 1;
-            }
-            return 0;
-        }
+        case Command::Run:
+            return execute(module);
 
         default:
             break;

@@ -1,0 +1,53 @@
+// Core types.
+//
+// Khudra's core types are built into the language rather than declared: the
+// checker knows their widths and their rules, and the VM knows their runtime
+// representation. This file is where they are documented, so `lib/` describes
+// the whole surface a program can rely on.
+//
+// Numbers
+//   int8  int16  int32  int64      signed, aliased i8 i16 i32 i64
+//   uint8 uint16 uint32 uint64     unsigned, aliased u8 u16 u32 u64
+//   byte                           an alias of uint8
+//   int                            an alias of int32
+//   float                          32-bit floating point
+//   dfloat                         64-bit floating point
+//
+//   Integer literals default to int32 and take a narrower or wider type from
+//   context. Overflow wraps. Nothing widens or narrows on its own -- move
+//   between widths with khuStdMath.convertTo (see lib/math.khu).
+//
+// bool
+//   Exactly `true` or `false`. Conditions must be bool; no other type is
+//   implicitly truthy.
+//
+// string
+//   An immutable reference to text. String literals live in the bytecode
+//   image's constant pool.
+//
+// Array
+//   A reference to an array. It has no element type yet, so it can be held,
+//   passed and compared but not indexed -- typed containers arrive with
+//   generics (docs/roadmap.md).
+//
+// *T
+//   A raw pointer. Never traced by the collector.
+//
+// MemoryAllocationTypeObject
+//   The object that selects how a class is allocated. It has exactly two
+//   factories:
+//
+//     MemoryAllocationTypeObject.setStandard()   garbage collected (default)
+//     MemoryAllocationTypeObject.setManual()     manual, released with free
+//
+//   A class declares one as a field, and it is read once, at allocation time:
+//
+//     public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+//
+//   An allocation site may override the class default with a leading `manual`
+//   or `standard` token -- `FrameBuffer(manual)`. Reassigning the field after
+//   construction is a type error: the strategy is fixed at materialization.
+//   See docs/memory-model.md.
+//
+// null
+//   Means "not instantiated yet", never "empty". It fits any reference slot.

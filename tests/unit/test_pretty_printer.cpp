@@ -174,6 +174,31 @@ KHU_TEST(pretty_printer, preserves_parentheses_where_they_matter) {
     KHU_CHECK_CONTAINS(text, "int32 e = (a & b) == c;");
 }
 
+KHU_TEST(pretty_printer, round_trips_namespaces_and_native_declarations) {
+    check_round_trip(
+        "public namespace mathish {\n"
+        "    native func add(int32 a, int32 b) -> int32;\n"
+        "    native func shout(string message);\n"
+        "    private native method quiet() -> bool;\n"
+        "}\n"
+        "\n"
+        "public class User {\n"
+        "    func go() {\n"
+        "        mathish.shout(\"hi\");\n"
+        "    }\n"
+        "}\n");
+}
+
+KHU_TEST(pretty_printer, round_trips_the_standard_library) {
+    // lib/*.khu is ordinary Khudra, so the printer has to handle it too.
+    const char* files[] = {"lib/math.khu", "lib/io.khu", "lib/khu.khu", "lib/core.khu"};
+    for (const char* relative : files) {
+        std::string source = read_project_file(relative);
+        KHU_CHECK(!source.empty());
+        if (!source.empty()) check_round_trip(source);
+    }
+}
+
 KHU_TEST(pretty_printer, round_trips_literals) {
     check_round_trip(
         "public class L {\n"

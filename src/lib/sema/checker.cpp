@@ -35,16 +35,25 @@ ExprInfo& Checker::info_for(ast::Expr& expr) {
 // ---------------------------------------------------------------------------
 
 Program* Checker::check(ast::CompilationUnit& unit) {
-    program_ = arena_.create<Program>();
-    install_builtins(*program_, types_, arena_);
+    util::Array<ast::CompilationUnit*> units;
+    units.push(&unit);
+    return check(std::move(units), unit);
+}
 
-    declare_classes(unit);
+Program* Checker::check(util::Array<ast::CompilationUnit*> units,
+                        ast::CompilationUnit& entry_unit) {
+    program_ = arena_.create<Program>();
+
+    // Declare every class and namespace across every unit first, so the
+    // standard library and the user's program can refer to each other's names
+    // regardless of the order they were loaded in.
+    for (ast::CompilationUnit* unit : units) declare_classes(*unit);
     resolve_inheritance();
     declare_members();
     resolve_strategies();
     build_layouts();
     validate_materialization_signatures();
-    resolve_entry_point(unit);
+    resolve_entry_point(entry_unit);
     check_bodies();
     return program_;
 }
@@ -71,10 +80,17 @@ void Checker::declare_classes(ast::CompilationUnit& unit) {
         symbol->visibility = decl->visibility;
         symbol->decl = decl;
         symbol->base_name = decl->base_name;
-        symbol->class_id = static_cast<std::uint32_t>(program_->classes.size());
+        symbol->is_namespace = decl->is_namespace;
         decl->symbol = symbol;
 
-        program_->classes.push(symbol);
+        // A namespace is never materialized, so it gets no class id and never
+        // reaches the layout, vtable or codegen passes.
+        if (symbol->is_namespace) {
+            program_->namespaces.push(symbol);
+        } else {
+            symbol->class_id = static_cast<std::uint32_t>(program_->classes.size());
+            program_->classes.push(symbol);
+        }
         program_->class_index.insert(symbol->name, symbol);
     }
 }
@@ -122,6 +138,92 @@ void Checker::resolve_inheritance() {
 
 void Checker::declare_members() {
     for (ClassSymbol* symbol : program_->classes) declare_class_members(*symbol);
+    for (ClassSymbol* symbol : program_->namespaces) declare_namespace_members(*symbol);
+}
+
+// A namespace holds nothing but `native` declarations: it is a place for the
+// toolchain's own operations to live with real Khudra signatures, so overload
+// resolution and error messages work the same way they do for user code.
+void Checker::declare_namespace_members(ClassSymbol& symbol) {
+    if (!symbol.decl) return;
+
+    for (ast::Decl* member : symbol.decl->members) {
+        if (member->kind != ast::DeclKind::Method) {
+            diagnostics_
+                .error(member->loc, "a namespace can only declare native functions")
+                .note(symbol.loc, "'" + std::string(symbol.name) +
+                                      "' is a namespace, so it has no instances to hold fields, "
+                                      "a constructor or a Procedures block");
+            continue;
+        }
+
+        auto& decl = *static_cast<ast::MethodDecl*>(member);
+        if (decl.is_constructor()) {
+            diagnostics_.error(decl.name_loc, "a namespace cannot declare a constructor");
+            continue;
+        }
+        if (!decl.is_native) {
+            diagnostics_
+                .error(decl.name_loc, "'" + std::string(decl.name) +
+                                          "' must be declared native")
+                .note(decl.name_loc,
+                      "a namespace member has no receiver, so its implementation comes from the "
+                      "toolchain");
+            continue;
+        }
+
+        auto* method = arena_.create<MethodSymbol>();
+        method->name = decl.name;
+        method->form = decl.form;
+        method->visibility = decl.visibility;
+        method->loc = decl.name_loc;
+        method->owner = &symbol;
+        method->decl = &decl;
+        method->is_static = true;
+        method->return_type =
+            decl.return_type ? resolve_type(decl.return_type) : types_.void_type();
+        declare_params(decl.params, method->params);
+        decl.symbol = method;
+
+        NativeBinding binding =
+            resolve_native_binding(symbol.name, decl.name, method->params.size());
+        if (!binding.valid()) {
+            diagnostics_
+                .error(decl.name_loc, "no runtime binding for '" + std::string(symbol.name) +
+                                          "." + std::string(decl.name) + "' with " +
+                                          std::to_string(method->params.size()) + " parameter" +
+                                          (method->params.size() == 1 ? "" : "s"))
+                .note(decl.name_loc,
+                      "native declarations are bound in src/lib/sema/builtins.cpp");
+            continue;
+        }
+        if (binding.intrinsic != Intrinsic::None) {
+            method->is_intrinsic = true;
+            method->intrinsic_id = static_cast<std::uint32_t>(binding.intrinsic);
+        } else {
+            method->is_native = true;
+            method->native_id = static_cast<std::uint32_t>(binding.native);
+        }
+
+        symbol.methods.push(method);
+        if (util::Array<MethodSymbol*>* bucket = symbol.method_index.find(decl.name)) {
+            for (MethodSymbol* existing : *bucket) {
+                if (existing->signature_matches(*method)) {
+                    diagnostics_
+                        .error(decl.name_loc, "'" + std::string(symbol.name) + "." +
+                                                  std::string(decl.name) +
+                                                  "' is already declared with the same "
+                                                  "parameter types")
+                        .note(existing->loc, "the first declaration is here");
+                }
+            }
+            bucket->push(method);
+        } else {
+            util::Array<MethodSymbol*> fresh;
+            fresh.push(method);
+            symbol.method_index.insert(decl.name, std::move(fresh));
+        }
+    }
 }
 
 void Checker::declare_params(const util::Array<ast::ParamDecl*>& decls,
@@ -170,6 +272,15 @@ void Checker::declare_class_members(ClassSymbol& symbol) {
 
             case ast::DeclKind::Method: {
                 auto& decl = *static_cast<ast::MethodDecl*>(member);
+                if (decl.is_native) {
+                    diagnostics_
+                        .error(decl.name_loc,
+                               "only a namespace member can be declared native")
+                        .note(symbol.loc, "'" + std::string(symbol.name) +
+                                              "' is a class, and its instances need a body to "
+                                              "dispatch to");
+                    break;
+                }
                 auto* method = arena_.create<MethodSymbol>();
                 method->name = decl.name;
                 method->form = decl.form;

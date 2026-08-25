@@ -1,18 +1,20 @@
-// Built-in namespaces.
+// Bindings for `native` declarations.
 //
-// `khuStdMath`, `io` and `khu` are classes that are never materialized: their
-// members are static and are reached as `Namespace.member(...)`. Phase 7
-// replaces these hand-registered declarations with real `.khu` sources under
-// lib/ that bind to the same native ids.
+// The standard library declares its signatures in `lib/*.khu`; this table says
+// what each declaration is bound to. A binding is either an **intrinsic**, which
+// codegen lowers to a single instruction, or a **native**, which becomes a
+// `callnative` the VM answers.
+//
+// Keeping the signatures in Khudra and the bindings here means the checker sees
+// real declarations with real types -- overload resolution, arity checking and
+// error messages all work the same way they do for user code.
 #ifndef KHU_SEMA_BUILTINS_H
 #define KHU_SEMA_BUILTINS_H
 
 #include <cstdint>
+#include <string_view>
 
 #include "bytecode/native.h"
-#include "sema/symbol.h"
-#include "sema/type.h"
-#include "util/arena.h"
 
 namespace khu::sema {
 
@@ -29,18 +31,27 @@ enum class Intrinsic : std::uint32_t {
     Remainder,
 };
 
-// Runtime-provided operations. The ids are the VM's, not ours -- see
-// bytecode/native.h -- so an image written here loads there.
 using Native = bytecode::NativeId;
 
-// Registers the built-in namespaces into `program`. Safe to call once per
-// compilation.
-void install_builtins(Program& program, TypeContext& types, util::Arena& arena);
+struct NativeBinding {
+    Intrinsic intrinsic = Intrinsic::None;
+    Native native = Native::None;
 
-// The name of the arithmetic namespace, used by the checker to spot intrinsics.
+    bool valid() const { return intrinsic != Intrinsic::None || native != Native::None; }
+};
+
+// Looks up the binding for `namespace_name.member_name` with `arity`
+// parameters. Returns an invalid binding when there is none.
+NativeBinding resolve_native_binding(std::string_view namespace_name,
+                                     std::string_view member_name, std::size_t arity);
+
+// The namespaces the compiler treats specially.
 constexpr const char* kMathNamespace = "khuStdMath";
 constexpr const char* kRuntimeNamespace = "khu";
 constexpr const char* kIoNamespace = "io";
+// The one member whose first argument is a type, so it cannot be declared in
+// Khudra and stays a compiler intrinsic.
+constexpr const char* kConvertTo = "convertTo";
 
 }  // namespace khu::sema
 

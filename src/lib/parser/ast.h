@@ -406,6 +406,9 @@ struct MethodDecl : Decl {
     // null means void: "no arrow = void" (KHU-PLAN.md, Returns).
     TypeNode* return_type = nullptr;
     bool explicit_void = false;  // written as `-> void`
+    // A `native` member has no body: the implementation is provided by the
+    // toolchain, either as a bytecode instruction or as a runtime call.
+    bool is_native = false;
     BlockStmt* body = nullptr;
     sema::MethodSymbol* symbol = nullptr;
     explicit MethodDecl(SourceLocation loc) : Decl(kKind, loc) {}
@@ -433,6 +436,9 @@ struct ClassDecl : Decl {
     SourceLocation name_loc;
     std::string_view base_name;  // empty when there is no `extends`
     SourceLocation base_loc;
+    // `namespace Name { ... }`: a container of static members that is never
+    // materialized. Its members are reached as `Name.member(...)`.
+    bool is_namespace = false;
     // Members in source order, so the pretty printer round-trips the layout.
     util::Array<Decl*> members;
     sema::ClassSymbol* symbol = nullptr;

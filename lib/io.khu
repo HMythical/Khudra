@@ -1,0 +1,40 @@
+// io -- console input and output.
+//
+// `print` writes a value with no separator; `printLine` appends a newline.
+// Both are declared once per type rather than taking a single "printable"
+// parameter, because Khudra has no interfaces yet and no implicit conversion.
+
+public namespace io {
+
+    // Writes a value.
+    native func print(string value);
+    native func print(bool value);
+    native func print(int8 value);
+    native func print(int16 value);
+    native func print(int32 value);
+    native func print(int64 value);
+    native func print(uint8 value);
+    native func print(uint16 value);
+    native func print(uint32 value);
+    native func print(uint64 value);
+    native func print(float value);
+    native func print(dfloat value);
+
+    // Writes a value followed by a newline.
+    native func printLine(string value);
+    native func printLine(bool value);
+    native func printLine(int8 value);
+    native func printLine(int16 value);
+    native func printLine(int32 value);
+    native func printLine(int64 value);
+    native func printLine(uint8 value);
+    native func printLine(uint16 value);
+    native func printLine(uint32 value);
+    native func printLine(uint64 value);
+    native func printLine(float value);
+    native func printLine(dfloat value);
+
+    // Reads one line from standard input, without its newline.
+    // Returns an empty string at end of input.
+    native func readLine() -> string;
+}

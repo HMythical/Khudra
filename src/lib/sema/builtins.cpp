@@ -1,121 +1,43 @@
 #include "sema/builtins.h"
 
 namespace khu::sema {
-namespace {
 
-struct Registrar {
-    Program& program;
-    TypeContext& types;
-    util::Arena& arena;
+NativeBinding resolve_native_binding(std::string_view namespace_name,
+                                     std::string_view member_name, std::size_t arity) {
+    NativeBinding binding;
 
-    ClassSymbol* make_namespace(std::string_view name) {
-        auto* symbol = arena.create<ClassSymbol>();
-        symbol->name = name;
-        symbol->is_namespace = true;
-        symbol->class_id = static_cast<std::uint32_t>(program.namespaces.size()) | 0x80000000u;
-        program.namespaces.push(symbol);
-        program.class_index.insert(name, symbol);
-        return symbol;
+    if (namespace_name == kMathNamespace) {
+        // Same-width arithmetic lowers to one instruction. There is no implicit
+        // conversion to fall back on, so every width is its own declaration in
+        // lib/math.khu and every one of them binds here.
+        if (arity != 2) return binding;
+        if (member_name == "add") binding.intrinsic = Intrinsic::Add;
+        else if (member_name == "subtract") binding.intrinsic = Intrinsic::Subtract;
+        else if (member_name == "multiply") binding.intrinsic = Intrinsic::Multiply;
+        else if (member_name == "divide") binding.intrinsic = Intrinsic::Divide;
+        else if (member_name == "remainder") binding.intrinsic = Intrinsic::Remainder;
+        return binding;
     }
 
-    VarSymbol* make_param(std::string_view name, const Type* type) {
-        auto* param = arena.create<VarSymbol>();
-        param->name = name;
-        param->type = type;
-        param->role = VarRole::Parameter;
-        param->visibility = ast::Visibility::Public;
-        return param;
+    if (namespace_name == kIoNamespace) {
+        if (member_name == "print" && arity == 1) binding.native = Native::Print;
+        else if (member_name == "printLine" && arity == 1) binding.native = Native::PrintLine;
+        else if (member_name == "readLine" && arity == 0) binding.native = Native::ReadLine;
+        return binding;
     }
 
-    MethodSymbol* declare(ClassSymbol* owner, std::string_view name, const Type* return_type) {
-        auto* method = arena.create<MethodSymbol>();
-        method->name = name;
-        method->form = ast::MethodForm::Func;
-        method->visibility = ast::Visibility::Public;
-        method->return_type = return_type;
-        method->owner = owner;
-        method->is_static = true;
-        owner->methods.push(method);
-        if (util::Array<MethodSymbol*>* bucket = owner->method_index.find(name)) {
-            bucket->push(method);
-        } else {
-            util::Array<MethodSymbol*> fresh;
-            fresh.push(method);
-            owner->method_index.insert(name, std::move(fresh));
+    if (namespace_name == kRuntimeNamespace) {
+        if (member_name == "stdlibLoadObject" && arity == 0) {
+            binding.native = Native::StdlibLoadObject;
+        } else if (member_name == "getType" && arity == 0) {
+            binding.native = Native::GetType;
+        } else if (member_name == "LoadRuntimeType" && arity == 0) {
+            binding.native = Native::LoadRuntimeType;
         }
-        return method;
+        return binding;
     }
 
-    // A same-width binary operation: add(int32, int32) -> int32.
-    void declare_binary(ClassSymbol* owner, std::string_view name, Intrinsic which,
-                        const Type* type) {
-        MethodSymbol* method = declare(owner, name, type);
-        method->params.push(make_param("a", type));
-        method->params.push(make_param("b", type));
-        method->is_intrinsic = true;
-        method->intrinsic_id = static_cast<std::uint32_t>(which);
-    }
-
-    void declare_native(ClassSymbol* owner, std::string_view name, const Type* return_type,
-                        Native native, const Type* argument) {
-        MethodSymbol* method = declare(owner, name, return_type);
-        if (argument) method->params.push(make_param("value", argument));
-        method->is_native = true;
-        method->native_id = static_cast<std::uint32_t>(native);
-    }
-};
-
-}  // namespace
-
-void install_builtins(Program& program, TypeContext& types, util::Arena& arena) {
-    Registrar registrar{program, types, arena};
-
-    // Every numeric type, in the order the checker reports them.
-    const Type* numeric[] = {
-        types.signed_int(8),    types.signed_int(16),   types.signed_int(32),
-        types.signed_int(64),   types.unsigned_int(8),  types.unsigned_int(16),
-        types.unsigned_int(32), types.unsigned_int(64), types.float_type(32),
-        types.float_type(64),
-    };
-
-    // khuStdMath: the full integer-width matrix. Khudra has no implicit
-    // widening, so every operation is declared once per width and mixing widths
-    // is a type error that names convertTo as the way out.
-    ClassSymbol* math = registrar.make_namespace(kMathNamespace);
-    for (const Type* type : numeric) {
-        registrar.declare_binary(math, "add", Intrinsic::Add, type);
-        registrar.declare_binary(math, "subtract", Intrinsic::Subtract, type);
-        registrar.declare_binary(math, "multiply", Intrinsic::Multiply, type);
-        registrar.declare_binary(math, "divide", Intrinsic::Divide, type);
-        if (type->is_integer()) {
-            registrar.declare_binary(math, "remainder", Intrinsic::Remainder, type);
-        }
-    }
-
-    // convertTo is an intrinsic: its first argument is a type, and it lowers to
-    // a `convert` opcode rather than a call.
-    MethodSymbol* convert = registrar.declare(math, "convertTo", types.error());
-    convert->is_intrinsic = true;
-    convert->intrinsic_id = static_cast<std::uint32_t>(Intrinsic::ConvertTo);
-
-    // io: printing and reading.
-    ClassSymbol* io = registrar.make_namespace(kIoNamespace);
-    registrar.declare_native(io, "print", types.void_type(), Native::Print, types.string_type());
-    registrar.declare_native(io, "printLine", types.void_type(), Native::PrintLine,
-                             types.string_type());
-    for (const Type* type : numeric) {
-        registrar.declare_native(io, "print", types.void_type(), Native::Print, type);
-        registrar.declare_native(io, "printLine", types.void_type(), Native::PrintLine, type);
-    }
-    registrar.declare_native(io, "print", types.void_type(), Native::Print, types.bool_type());
-    registrar.declare_native(io, "printLine", types.void_type(), Native::PrintLine,
-                             types.bool_type());
-    registrar.declare_native(io, "readLine", types.string_type(), Native::ReadLine, nullptr);
-
-    // khu: the runtime namespace. Phase 7 fills it in from lib/; registering it
-    // now means `khu.somethingUnknown()` reports a missing member rather than an
-    // unknown name.
-    registrar.make_namespace(kRuntimeNamespace);
+    return binding;
 }
 
 }  // namespace khu::sema

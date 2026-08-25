@@ -15,6 +15,10 @@ enum class NativeId : std::uint32_t {
     Print = 1,
     PrintLine = 2,
     ReadLine = 3,
+    // khu.* -- the runtime namespace.
+    StdlibLoadObject = 4,
+    GetType = 5,
+    LoadRuntimeType = 6,
 };
 
 const char* native_name(NativeId id);

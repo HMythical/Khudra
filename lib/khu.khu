@@ -1,0 +1,28 @@
+// khu -- the runtime namespace.
+//
+// These are the hooks a loaded object has into the runtime itself, as used by
+// `example.khu` at the project root.
+
+public namespace khu {
+
+    // Ensures the standard library is resident for the current object.
+    //
+    // The library is linked into every image, so in this implementation the
+    // call completes immediately. It exists as an explicit step because a
+    // Procedures block runs before anything else in the object can, and a
+    // future loader may have real work to do here.
+    native func stdlibLoadObject();
+
+    // The current object's type descriptor.
+    //
+    // Type descriptors are `Array` handles. Khudra's `Array` has no element
+    // type yet, so a descriptor is opaque: it can be stored and passed, and
+    // reading through it needs the reflection support listed in
+    // docs/roadmap.md. Until then this yields `null` -- "not instantiated yet",
+    // which is exactly what an unresolved descriptor is.
+    native func getType() -> Array;
+
+    // The current object's type descriptor, resolved now rather than lazily.
+    // Same shape as getType(); see the note above.
+    native func LoadRuntimeType() -> Array;
+}

@@ -399,6 +399,24 @@ bool Vm::call_native(std::uint32_t native_id, std::uint8_t argc) {
             return true;
         }
 
+        case bytecode::NativeId::StdlibLoadObject:
+            // The standard library is linked into every image, so there is
+            // nothing to load; the call exists as an explicit step for a future
+            // loader that has real work to do.
+            for (std::uint8_t i = 0; i < argc; ++i) pop();
+            return true;
+
+        case bytecode::NativeId::GetType:
+        case bytecode::NativeId::LoadRuntimeType: {
+            for (std::uint8_t i = 0; i < argc; ++i) pop();
+            // A type descriptor is an `Array` handle, and `Array` has no
+            // element type yet, so there is nothing observable to hand back.
+            // `null` -- "not instantiated yet" -- is exactly right for an
+            // unresolved descriptor; reflection is a roadmap item.
+            push(Value::make_null());
+            return true;
+        }
+
         case bytecode::NativeId::None:
             break;
     }
