@@ -1,0 +1,16 @@
+before Session(7)
+  session block start
+    resource 7 acquired
+  session block end
+  session constructor, seed 7
+after Session(7)
+seed is 7
+resource id is 7
+before Audited(9)
+  session block start
+    resource 9 acquired
+  session block end
+  audited block (runs after the base block)
+  session constructor, seed 9
+  audited constructor (runs after the base constructor)
+after Audited(9)

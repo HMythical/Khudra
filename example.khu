@@ -1,0 +1,50 @@
+bring khu::stdlib;
+
+public class Example{
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard(); // Garbage-collected
+
+    public int32 x = 0;
+    private int64 y = 0;
+    public bool yes = false;
+    private Array char = null; // Does not mean empty. Means is not instantiated yet.
+
+
+    private Procedures{
+        khu.stdlibLoadObject();
+        pointToOtherInstructionOutsideClass();
+        executeInstruction();
+        instanceObject();
+    }
+
+
+    public Example(){
+        this.char = khu.getType();
+        this.char = khu.LoadRuntimeType()   ;
+    }
+
+
+
+    // Public FUNCTIONS
+    func math(int x, int y) -> int32{
+        private i32 result = khuStdMath.add(x,y);
+        return result;
+    }
+
+    // PRIVATE METHOD
+
+    method foo(int x, float y, dfloat z) -> int64{
+        khuStdMath.convertTo(int64, y);
+        khuStdMath.convertTo(int64, z);
+
+        public int64 result1 = khuStdMath.subtract(x,z);
+        public int64 result2 = khuStdMath.add(result1, y);
+
+        return result2;
+
+    }
+
+
+}
+
+
+

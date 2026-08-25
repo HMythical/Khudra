@@ -1,0 +1,53 @@
+// Both memory strategies in one program: a collected owner holding a manual
+// node, the pin that creates, and the order a release has to happen in.
+bring khu::stdlib;
+
+public class Node {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();
+
+    public int32 value = 0;
+    public Node next = null;
+
+    public Procedures(int32 seed) {
+        io.printLine("materializing a manual Node");
+    }
+
+    public Node(int32 seed) {
+        this.value = seed;
+    }
+}
+
+public class List {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    // A managed slot holding a manual reference: assigning to it pins the node.
+    public Node head = null;
+    public int32 count = 0;
+
+    func push(int32 value) {
+        Node fresh = Node(value);
+        fresh.next = this.head;
+        this.head = fresh;
+        this.count = khuStdMath.add(this.count, 1);
+    }
+
+    // The pin has to be cleared before the node can be released.
+    func releaseHead() {
+        Node doomed = this.head;
+        this.head = null;
+        free(doomed);
+        this.count = khuStdMath.subtract(this.count, 1);
+    }
+
+    func main() {
+        List list = List();
+        list.push(1);
+        list.push(2);
+        list.releaseHead();
+        io.printLine(list.count);
+
+        // A site override beats the class default.
+        Node scratch = Node(manual, 99);
+        free(scratch);
+    }
+}

@@ -1,0 +1,28 @@
+// Integer widths are explicit: nothing widens or narrows on its own, so every
+// mixed-width step goes through khuStdMath.convertTo.
+bring khu::stdlib;
+
+public class Widths {
+    public int32 small = 0;
+    public int64 wide = 0;
+
+    func main() {
+        // A literal takes its width from context; with no context it is int32.
+        int32 a = 7;
+        int64 b = 7;
+
+        int32 sum = khuStdMath.add(a, 35);
+        int64 widened = khuStdMath.convertTo(int64, sum);
+        int64 total = khuStdMath.add(widened, b);
+
+        uint8 byteValue = 200;
+        uint8 doubled = khuStdMath.add(byteValue, 55);
+
+        dfloat ratio = khuStdMath.divide(1.5, 0.5);
+        float narrow = khuStdMath.convertTo(float, ratio);
+
+        io.printLine(total);
+        io.printLine(doubled);
+        io.printLine(narrow);
+    }
+}

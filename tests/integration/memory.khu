@@ -1,0 +1,97 @@
+// Both heaps at once: a collected list, a manual node holding a collected
+// payload, and the pin that a managed slot puts on a manual object.
+bring khu::stdlib;
+
+public class Box {
+    public int32 value = 0;
+    public Box next = null;
+}
+
+public class Node {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();
+    public int32 value = 0;
+    public Box payload = null;
+}
+
+public class Registry {
+    // A managed slot holding a manual reference: assigning to it pins the node.
+    public Node current = null;
+    public Box kept = null;
+}
+
+public class Memory {
+    public Registry registry = null;
+    public int32 checksum = 0;
+
+    func buildList(int32 count) -> Box {
+        Box head = null;
+        int32 i = 0;
+        while (i < count) {
+            Box fresh = Box();
+            fresh.value = i;
+            fresh.next = head;
+            head = fresh;
+            i = khuStdMath.add(i, 1);
+        }
+        return head;
+    }
+
+    func total(Box list) -> int32 {
+        int32 sum = 0;
+        Box cursor = list;
+        while (cursor != null) {
+            sum = khuStdMath.add(sum, cursor.value);
+            cursor = cursor.next;
+        }
+        return sum;
+    }
+
+    // Allocates objects that nothing keeps, so the collector has work to do.
+    func churn(int32 rounds) {
+        int32 i = 0;
+        while (i < rounds) {
+            Box junk = Box();
+            junk.value = i;
+            i = khuStdMath.add(i, 1);
+        }
+    }
+
+    func round(int32 seed) {
+        Node node = Node();
+        node.value = seed;
+
+        // manual -> managed: the payload is reachable only through a manual
+        // object, so the collector has to trace it from there.
+        Box payload = Box();
+        payload.value = khuStdMath.multiply(seed, 3);
+        node.payload = payload;
+
+        // managed -> manual: this pins the node.
+        this.registry.current = node;
+
+        this.churn(30);
+
+        this.checksum = khuStdMath.add(this.checksum, node.payload.value);
+
+        // Clearing the slot drops the pin, and only then can the node go.
+        this.registry.current = null;
+        free(node);
+    }
+
+    func main() {
+        this.registry = Registry();
+        this.registry.kept = this.buildList(100);
+
+        io.printLine(this.total(this.registry.kept));
+
+        int32 i = 0;
+        while (i < 50) {
+            this.round(i);
+            i = khuStdMath.add(i, 1);
+        }
+
+        io.printLine(this.checksum);
+        // The kept list survived every collection those rounds triggered.
+        io.printLine(this.total(this.registry.kept));
+    }
+}

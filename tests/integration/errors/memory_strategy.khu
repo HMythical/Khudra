@@ -1,0 +1,21 @@
+// The memory strategy is read once, at allocation time, and fixed there.
+bring khu::stdlib;
+
+public class Fixed {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    func switchIt() {
+        this.type = MemoryAllocationTypeObject.setManual();
+    }
+
+    func releaseMe() {
+        Fixed f = Fixed();
+        free(f);
+    }
+
+    func main() { }
+}
+
+public class BadInitializer {
+    public MemoryAllocationTypeObject type = null;
+}

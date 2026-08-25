@@ -1,0 +1,17 @@
+// Nothing widens or narrows on its own. Every mixed-width step goes through
+// khuStdMath.convertTo.
+bring khu::stdlib;
+
+public class Widths {
+    func go() {
+        int32 narrow = 1;
+        int64 wide = 2;
+
+        int64 sum = khuStdMath.add(narrow, wide);
+        int64 assigned = narrow;
+        int32 shrunk = wide;
+        int32 mixed = narrow + wide;
+    }
+
+    func main() { }
+}

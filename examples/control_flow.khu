@@ -1,0 +1,43 @@
+// Methods, calls and control flow: what the bytecode VM has to get right
+// before objects exist.
+bring khu::stdlib;
+
+public class ControlFlow {
+    func factorial(int64 n) -> int64 {
+        if (n <= 1) {
+            return 1;
+        }
+        return khuStdMath.multiply(n, this.factorial(khuStdMath.subtract(n, 1)));
+    }
+
+    func fizz(int32 limit) -> int32 {
+        int32 i = 1;
+        int32 hits = 0;
+        while (i <= limit) {
+            if (i % 15 == 0) {
+                io.printLine("fizzbuzz");
+                hits = khuStdMath.add(hits, 1);
+            } else if (i % 3 == 0) {
+                io.printLine("fizz");
+            } else if (i % 5 == 0) {
+                io.printLine("buzz");
+            }
+            i = khuStdMath.add(i, 1);
+        }
+        return hits;
+    }
+
+    method describe(bool flag) -> string {
+        if (flag && true) {
+            return "yes";
+        }
+        return "no";
+    }
+
+    func main() {
+        io.printLine(this.factorial(10));
+        io.printLine(this.fizz(15));
+        io.printLine(this.describe(true));
+        io.printLine(this.describe(false || false));
+    }
+}
