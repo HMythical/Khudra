@@ -61,19 +61,85 @@ nothing about the native work forecloses it.
 
 ## Language
 
-### Generics
+### Generics -- done, by erasure
 
-**Seam:** `sema::Type` and `ast::TypeNode`.
+`Array<T>` and `class Name<T, ...>` both exist. The choice recorded here is
+**erasure**: one class descriptor per class whatever the arguments were, and a
+`T` slot holding whatever tagged value an instantiation put there. It was the
+option that fits the runtime rather than the one that fits the checker -- values
+are already tagged, so an erased slot is exactly as safe to trace as a declared
+one, and monomorphization would have bought reified arguments at the cost of a
+class id per instantiation and a second copy of every method.
 
-`Array` is the visible gap: it is a reference with no element type, so it can be
-held, passed and compared but not indexed. `Checker::check_index` says so in as
-many words, and `emit_expr` reports indexing as unimplemented rather than
-guessing.
+What erasure left on the table, and what is still open:
 
-Adding generics means a parameterized `Type` kind, substitution at
-instantiation, and either erasure (one class descriptor, unchecked slots) or
-monomorphization (one class id per instantiation, which the class table already
-supports since ids are just indices).
+- **Generics and inheritance are not combined.** A class with type parameters
+  cannot `extends` another, because the vtable a subclass copies no longer
+  records the arguments its base was written with. Substituting through an
+  inherited signature needs somewhere to keep them.
+- **No variance.** Arguments are invariant, because there is nowhere to declare
+  anything else.
+- **No constraints.** A `T` is any type, so nothing inside a generic class can
+  do anything to a `T` but store it and hand it back.
+- **A `T` slot starts as `null`**, whatever `T` is. A container must not hand
+  back a slot it has not written; the standard library's containers trap
+  instead.
+- **Reified arguments** -- asking a value what it was instantiated with -- would
+  need the descriptor erasure deliberately does not keep, and belongs with
+  reflection below.
+
+### `const` members in a namespace
+
+**Seam:** `Checker::declare_namespace_members`, which today requires every
+namespace member to be `native`.
+
+Several places in the standard library want a constant and have to ship a
+zero-argument function instead: `khuStdMath.pi()`, `khuStdMath.e()`, and the
+whole `khuErrors` code table. They read as calls because there is nothing else
+to write, and every one of them is a `callnative` at run time for a value that
+never changes.
+
+A `const` member would be a constant-pool entry the checker folds at the use
+site. The values do not change when it lands; only the parentheses go.
+
+### Closures and iteration
+
+**Seam:** `ast::MethodDecl` and the frame layout.
+
+Two things in the standard library are shaped by their absence:
+
+- **Iteration is an index loop.** `List`, `Stack` and `Queue` are walked with
+  `while (i < size())`, and `Map` answers `keys()` with a `List<K>` because it
+  has no index to walk. A `for`-over-collection needs somewhere to put the
+  iterator's state and a way to name the element.
+- **`Result.recover(func)` is not there.** It is the one member of `Result` that
+  PLAN.md asked for and that could not be written: it takes a function. The
+  manual idiom -- `if (r.ok())` -- is what the documentation offers instead.
+
+### A uniform `toString`
+
+**Seam:** the vtable, and `io`'s per-type overload matrix.
+
+`io.print` is declared once per type, so there is no overload for a class
+reference and no way to write one. `io.describe` fills the gap by rendering a
+value of any type -- an object as `<ClassName>` -- but that is identity, not
+content, because a class has no way to say how it wants to be printed.
+
+Interfaces (below) would give one; so would a special-cased `toString` the
+emitter looks for. Either way, `io.describe` becomes the fallback rather than
+the only answer.
+
+### `khuStdSystem`
+
+**Seam:** the entry points -- `khudra run`, `run --native`, and the `main()` a
+built binary carries -- plus a `khu_rt_exit` host call.
+
+The environment, the command line and process exit are the one part of the
+optional standard library that is not just more natives. Runtime arguments have
+to be threaded from three different `main`s into a place the natives can read,
+and `exit` has to unwind the same way a trap does so a built binary and the VM
+agree about what happens on the way out. `khuStdRandom` and `khuStdTime` needed
+none of that, which is why they landed and this did not.
 
 ### Interfaces
 

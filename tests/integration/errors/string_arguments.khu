@@ -1,0 +1,26 @@
+// The string surface takes strings. There is no implicit conversion to one, and
+// no operator that builds one.
+bring khu::stdlib;
+
+public class StringArguments {
+    func go() {
+        // A number is not a string; khuStdConv.toString is the step across.
+        io.printLine(khuStdString.length(42));
+
+        // `+` is arithmetic. Concatenation is a call.
+        string joined = "a" + "b";
+
+        // An offset is an int32, not a width the caller happens to have.
+        string text = "abc";
+        int64 wide = 1;
+        io.printLine(khuStdString.charAt(text, wide));
+
+        // concat is a fixed set of arities, not varargs.
+        io.printLine(khuStdString.concat(text));
+
+        // split needs a typed array, which is not a thing yet.
+        io.printLine(khuStdString.split(text, ","));
+    }
+
+    func main() { }
+}

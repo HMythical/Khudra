@@ -1,0 +1,132 @@
+// khuStdString -- operations over immutable byte strings.
+//
+// Khudra has no string operators: `+` does not concatenate and `[]` does not
+// index a string in a form codegen can lower yet. This namespace is the whole
+// surface, and it is deliberately a wide one, because there is nothing else.
+//
+// ## Immutable, and freshly allocated
+//
+// Nothing here modifies its argument -- a string may be a constant in the
+// bytecode image, shared by every frame that loads it. Every operation that
+// produces a string produces a new one, which lives for the rest of the run.
+//
+// ## Bytes, not code points
+//
+// A `string` is a sequence of bytes. `length` counts bytes, `charAt` yields a
+// byte, and `substring` cuts between bytes, so a multi-byte UTF-8 code point
+// occupies several positions and cutting through the middle of one produces a
+// string that is no longer valid UTF-8. Case folding, trimming and the
+// `*IgnoreCase` comparisons are ASCII-only for the same reason: a byte above
+// 0x7f is left exactly as it is.
+//
+// ## Out of range is a value
+//
+// An index is usually computed, often from input, so being handed one that is
+// out of range is not a programming error the way dereferencing null is:
+//
+//   - `charAt` answers 0 for an index outside the string.
+//   - `substring` clamps both ends into the string, and a reversed range names
+//     the empty string.
+//   - `indexOf` and `lastIndexOf` answer -1 when there is no match.
+//
+// Those sentinels are values a successful call can also produce -- 0 is a byte
+// a string can contain -- which is why they are the shape for now rather than
+// forever: they become `khuErrors.Result<T>` when generics land
+// (docs/roadmap.md).
+//
+// Passing `null` where a `string` is expected is a different thing: it is not a
+// value out of range, it is no value at all, and it traps.
+//
+// ## What is not here yet
+//
+// `split` returns an `Array<string>`, so it arrives with the collections
+// (docs/roadmap.md). Until then, walk a string with `indexOf` and `substring`.
+
+public namespace khuStdString {
+
+    // ---------------------------------------------------------------------
+    // Size and access
+    // ---------------------------------------------------------------------
+
+    // The number of bytes in `text`.
+    native func length(string text) -> int32;
+
+    // The byte at `index`, or 0 when `index` is outside the string.
+    native func charAt(string text, int32 index) -> uint8;
+
+    // The bytes of `text` in [start, end). Both ends are clamped into the
+    // string, and an `end` below `start` names the empty string.
+    native func substring(string text, int32 start, int32 end) -> string;
+
+    // True when `text` has no bytes at all, and when it has nothing but ASCII
+    // whitespace, respectively.
+    native func isEmpty(string text) -> bool;
+    native func isBlank(string text) -> bool;
+
+    // ---------------------------------------------------------------------
+    // Building
+    //
+    // Khudra has no varargs, so `concat` is a handful of arities rather than
+    // one signature. They all do the same thing.
+    // ---------------------------------------------------------------------
+
+    native func concat(string a, string b) -> string;
+    native func concat(string a, string b, string c) -> string;
+    native func concat(string a, string b, string c, string d) -> string;
+    native func concat(string a, string b, string c, string d, string e) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f) -> string;
+
+    // `text` repeated `count` times. A `count` of 0 or less gives the empty
+    // string. A result longer than an int32 can count is a runtime error,
+    // because `length` could not describe it.
+    native func repeat(string text, int32 count) -> string;
+
+    // ---------------------------------------------------------------------
+    // Searching
+    // ---------------------------------------------------------------------
+
+    // The offset of the first (or last) occurrence of `needle`, or -1. The
+    // three-argument form starts looking at `from`, clamped into the string.
+    // An empty needle is found at the start.
+    native func indexOf(string text, string needle) -> int32;
+    native func indexOf(string text, string needle, int32 from) -> int32;
+    native func lastIndexOf(string text, string needle) -> int32;
+
+    native func contains(string text, string needle) -> bool;
+    native func startsWith(string text, string prefix) -> bool;
+    native func endsWith(string text, string suffix) -> bool;
+
+    // ---------------------------------------------------------------------
+    // Comparing
+    //
+    // `==` on two strings already compares contents, so `equals` is the
+    // spelled-out form of it; the rest is what the operators cannot say.
+    // ---------------------------------------------------------------------
+
+    native func equals(string a, string b) -> bool;
+    native func equalsIgnoreCase(string a, string b) -> bool;
+
+    // -1, 0 or 1: byte-wise, unsigned, and a prefix sorts before what extends
+    // it. Exactly those three values, never a difference of bytes.
+    native func compareTo(string a, string b) -> int32;
+    native func compareToIgnoreCase(string a, string b) -> int32;
+
+    // ---------------------------------------------------------------------
+    // Deriving
+    // ---------------------------------------------------------------------
+
+    // ASCII case folding; every other byte is left alone.
+    native func toUpperCase(string text) -> string;
+    native func toLowerCase(string text) -> string;
+
+    // ASCII whitespace removed from both ends, from the start, from the end.
+    native func trim(string text) -> string;
+    native func trimStart(string text) -> string;
+    native func trimEnd(string text) -> string;
+
+    // `replace` rewrites the first occurrence of `from`; `replaceAll` rewrites
+    // every one. An empty `from` matches everywhere and consumes nothing, so
+    // both hand `text` back unchanged rather than looping forever.
+    native func replace(string text, string from, string to) -> string;
+    native func replaceAll(string text, string from, string to) -> string;
+}

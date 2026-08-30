@@ -169,6 +169,38 @@ KHU_TEST(stdlib, exposes_the_khu_runtime_namespace) {
         "true\n");
 }
 
+// The clock cannot have a golden, so what is asserted is what is actually true
+// of it: that the monotonic clock does not go backwards, and that nowString has
+// the shape it promises.
+KHU_TEST(stdlib, the_clock_is_monotonic_and_formatted) {
+    StdRun result = run_source(
+        "bring khu::stdlib;\n\n"
+        "public class T {\n"
+        "    func main() {\n"
+        "        int64 first = khuStdTime.monotonicNanos();\n"
+        "        khuStdTime.sleep(2);\n"
+        "        int64 second = khuStdTime.monotonicNanos();\n"
+        "        io.printLine(second >= first);\n"
+        "        io.printLine(khuStdTime.nowMillis() > 0);\n"
+        "        io.printLine(khuStdTime.nowNanos() > 0);\n"
+        "        string stamp = khuStdTime.nowString(true);\n"
+        "        io.printLine(khuStdString.length(stamp));\n"
+        "        io.printLine(khuStdString.charAt(stamp, 4));\n"
+        "        io.printLine(khuStdString.charAt(stamp, 10));\n"
+        "        io.printLine(khuStdString.endsWith(stamp, \"Z\"));\n"
+        "        io.printLine(khuStdString.endsWith(khuStdTime.nowString(false), \"Z\"));\n"
+        "        io.printLine(khuStdConv.canParseInt32(khuStdString.substring(stamp, 0, 4)));\n"
+        "    }\n"
+        "}\n");
+    if (!result.compiled) {
+        KHU_FAIL("did not compile:\n" + result.diagnostics);
+        return;
+    }
+    KHU_CHECK(result.ran);
+    // 20 bytes: `2026-08-30T14:03:07Z`, with '-' at 4 and 'T' at 10.
+    KHU_CHECK_EQ(result.output, std::string("true\ntrue\ntrue\n20\n45\n84\ntrue\nfalse\ntrue\n"));
+}
+
 KHU_TEST(stdlib, rejects_a_native_member_on_a_class) {
     StdRun result = run_source(
         "public class T {\n"

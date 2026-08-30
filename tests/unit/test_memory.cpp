@@ -453,6 +453,55 @@ KHU_TEST(memory, survives_interleaved_gc_and_manual_traffic) {
     KHU_CHECK_EQ(result.manual_bytes_leaked, static_cast<std::size_t>(0));
 }
 
+// khuStdMem hands out blocks from the same allocator the `manual` strategy
+// uses, so a program that releases everything it allocated leaves the counters
+// exactly where it found them.
+KHU_TEST(memory, buffers_are_accounted_for_alongside_manual_objects) {
+    std::size_t before = khu_manual_live_bytes();
+    std::size_t blocks_before = khu_manual_live_blocks();
+    MemoryRun result = run_program(
+        "public class T {\n"
+        "    func main() {\n"
+        "        int32 i = 0;\n"
+        "        while (i < 200) {\n"
+        "            *byte buffer = khuStdMem.alloc(64);\n"
+        "            buffer[0] = 1;\n"
+        "            khuStdMem.fill(buffer, 2, 64);\n"
+        "            khuStdMem.release(buffer);\n"
+        "            i = khuStdMath.add(i, 1);\n"
+        "        }\n"
+        "        *byte grown = khuStdMem.alloc(8);\n"
+        "        grown = khuStdMem.realloc(grown, 4096);\n"
+        "        grown = khuStdMem.realloc(grown, 0);\n"
+        "        io.printLine(khuStdMem.isNull(grown));\n"
+        "    }\n"
+        "}\n");
+    KHU_CHECK(result.ran);
+    KHU_CHECK_EQ(result.output, std::string("true\n"));
+    KHU_CHECK_EQ(khu_manual_live_bytes(), before);
+    KHU_CHECK_EQ(khu_manual_live_blocks(), blocks_before);
+}
+
+// A buffer is not collected and no arena takes it back at shutdown: what the
+// program allocated, the program releases. The counters follow it either way,
+// which is what makes that checkable from inside a program.
+KHU_TEST(memory, buffer_accounting_is_visible_to_the_program) {
+    std::size_t before = khu_manual_live_bytes();
+    MemoryRun result = run_program(
+        "public class T {\n"
+        "    func main() {\n"
+        "        int64 start = khuStdMem.liveBytes();\n"
+        "        *byte buffer = khuStdMem.alloc(128);\n"
+        "        io.printLine(khuStdMath.subtract(khuStdMem.liveBytes(), start));\n"
+        "        khuStdMem.release(buffer);\n"
+        "        io.printLine(khuStdMath.subtract(khuStdMem.liveBytes(), start));\n"
+        "    }\n"
+        "}\n");
+    KHU_CHECK(result.ran);
+    KHU_CHECK_EQ(result.output, std::string("128\n0\n"));
+    KHU_CHECK_EQ(khu_manual_live_bytes(), before);
+}
+
 KHU_TEST(memory, leaves_no_manual_bytes_behind_after_a_program_runs) {
     std::size_t before = khu_manual_live_bytes();
     MemoryRun result = run_program(

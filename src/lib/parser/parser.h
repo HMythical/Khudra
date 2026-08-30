@@ -58,6 +58,9 @@ private:
     bool parse_param_list(util::Array<ast::ParamDecl*>& out);
 
     ast::TypeNode* parse_type();
+    void close_type_arguments();
+    void parse_type_arguments(util::Array<ast::TypeNode*>& out);
+    std::size_t skip_type_arguments(std::size_t index) const;
     bool at_type_start() const;
     // True when the cursor is at `Type name` -- the only shape that starts a
     // local declaration.

@@ -172,7 +172,7 @@ KHU_TEST(disassembler, renders_a_readable_listing) {
     Module module = build_sample_module();
     std::string text = disassemble(module);
 
-    KHU_CHECK_CONTAINS(text, "; Khudra bytecode v1.1  source=sample.khu");
+    KHU_CHECK_CONTAINS(text, "; Khudra bytecode v1.2  source=sample.khu");
     KHU_CHECK_CONTAINS(text, "class #0  Sample  strategy=manual  size=12");
     KHU_CHECK_CONTAINS(text, "public  int32 value  @0  raw");
     KHU_CHECK_CONTAINS(text, "private ref next  @4  manual-ref");

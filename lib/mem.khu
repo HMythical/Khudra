@@ -1,0 +1,126 @@
+// khuStdMem -- manual buffers, and the operations over them.
+//
+// This is the raw side of Khudra's memory model. Objects are allocated by
+// materialization and released by `free` or by the collector
+// (docs/memory-model.md); a *buffer* is bytes with no header a program can see,
+// and this namespace is where one comes from and goes back to.
+//
+// ## Buffers are manual
+//
+// `alloc` hands out a block from the same allocator the `manual` class strategy
+// uses (`utils/alloc.c`), so a buffer shows up in the same leak accounting a
+// manual object does -- `liveBytes` and `liveBlocks` report it, and the test
+// suite asserts they return to zero. A buffer is **not** collected. What alloc
+// hands out, `release` takes back, and nothing else will.
+//
+// ## Checked, unlike C
+//
+// A block carries its length in a header the program cannot reach, and every
+// operation here uses it: a `copy`, `fill`, `zero` or `compare` that would run
+// past the end of a buffer is a **fatal runtime error**, not a corrupted heap.
+// So is releasing something this runtime did not hand out -- which is what a
+// double release looks like from the inside.
+//
+// The releasing operation is called `release` rather than `free` because `free`
+// is a statement keyword: `free(object)` releases a manually allocated *object*
+// (docs/memory-model.md), and a buffer is not an object. The two are named apart
+// so the difference stays visible.
+//
+// Two things stay unchecked, and both are named rather than hidden:
+//
+//   - **Indexing.** `buffer[i]` reads and writes without a bounds check,
+//     because a `*T` is an address and carries no length with it. That is the
+//     whole difference between a `*T` and an `Array<T>`, and it is why
+//     `Array<T>` is what a program should reach for first. A null pointer still
+//     traps.
+//   - **A foreign pointer.** A pointer this runtime did not allocate has no
+//     header to read, so nothing can be checked about it. Today `alloc` is the
+//     only thing that produces a `*byte`, so this cannot arise from Khudra
+//     source; the operations say so by trapping rather than proceeding blind.
+//
+// ## Indexing
+//
+// A `*T` is indexed with `[]`, at the width of `T`:
+//
+//     *byte buffer = khuStdMem.alloc(16);
+//     buffer[0] = 65;
+//     io.printLine(buffer[0]);
+//     khuStdMem.free(buffer);
+//
+// The index is scaled by the element's width, so `*int32` steps four bytes at a
+// time. `void` and reference element types cannot be indexed: there is nothing
+// at an address to read them out of.
+
+public namespace khuStdMem {
+
+    // ---------------------------------------------------------------------
+    // Allocating
+    // ---------------------------------------------------------------------
+
+    // A zeroed buffer of `size` bytes. A negative size is a runtime error; a
+    // size of 0 still gives a real, freeable block.
+    native func alloc(int32 size) -> *byte;
+
+    // Resizes `buffer`, keeping as much of its contents as still fits and
+    // zeroing anything new. The old pointer is released -- do not use it again.
+    // A null buffer allocates; a size of 0 releases and answers null.
+    native func realloc(*byte buffer, int32 size) -> *byte;
+
+    // Releases a buffer. Releasing null is a no-op; releasing anything this
+    // runtime did not hand out, including a buffer already released, is a
+    // runtime error.
+    native func release(*byte buffer);
+
+    // ---------------------------------------------------------------------
+    // Moving bytes
+    //
+    // Every one of these checks its range against the buffer's real length.
+    // ---------------------------------------------------------------------
+
+    // Copies `count` bytes. The ranges must not overlap -- that is checked, and
+    // `move` is the one that allows it.
+    native func copy(*byte destination, *byte source, int32 count);
+
+    // The same, for ranges that may overlap.
+    native func move(*byte destination, *byte source, int32 count);
+
+    // Sets `count` bytes to 0, or to `value`.
+    native func zero(*byte buffer, int32 count);
+    native func fill(*byte buffer, uint8 value, int32 count);
+
+    // -1, 0 or 1: the byte-wise ordering of the two ranges. Exactly those three
+    // values, never a difference of bytes.
+    native func compare(*byte left, *byte right, int32 count) -> int32;
+
+    // ---------------------------------------------------------------------
+    // Asking about a pointer
+    // ---------------------------------------------------------------------
+
+    // How many bytes a buffer holds, or 0 when it is null or was not allocated
+    // here. The `Array` form answers the whole allocation, header included --
+    // it is what the object costs, not how many elements it holds
+    // (khuStdCollection.arraySize is that).
+    native func sizeOf(*byte buffer) -> int32;
+    native func sizeOf(Array array) -> int32;
+
+    // The numeric address. Not reproducible across runs: it is here to be
+    // compared and printed while debugging, not to be depended on -- which is
+    // also why khuStdCollection.hash does not use one.
+    native func addressOf(*byte buffer) -> uint64;
+
+    // Whether two pointers name the same address.
+    native func refEquals(*byte left, *byte right) -> bool;
+
+    // Whether a pointer names nothing.
+    native func isNull(*byte buffer) -> bool;
+
+    // ---------------------------------------------------------------------
+    // Accounting
+    //
+    // The same counters the manual class strategy feeds, so a program can
+    // assert it left nothing behind -- which is what the leak tests do.
+    // ---------------------------------------------------------------------
+
+    native func liveBytes() -> int64;
+    native func liveBlocks() -> int64;
+}

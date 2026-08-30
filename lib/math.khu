@@ -5,8 +5,10 @@
 // rather than a handful of generic signatures: the checker resolves the call by
 // the operand types, and a mixed-width call has no match by construction.
 //
-// Every declaration below lowers to a single bytecode instruction; none of them
-// is a real call at run time.
+// The arithmetic operators lower to a single bytecode instruction each and are
+// not real calls at run time. Everything below them -- the utilities, the
+// transcendentals and the constants -- is a native: there is no instruction for
+// it, and no way to write it in Khudra either.
 //
 // `convertTo(<type>, <expr>)` is the one operation that cannot be declared
 // here: its first argument is a *type*, which Khudra has no way to write as a
@@ -74,4 +76,189 @@ public namespace khuStdMath {
     native func remainder(uint16 a, uint16 b) -> uint16;
     native func remainder(uint32 a, uint32 b) -> uint32;
     native func remainder(uint64 a, uint64 b) -> uint64;
+
+    // -0 - a. Signed and floating point only: negating an unsigned value wraps
+    // it around its own width, which is arithmetic rather than negation.
+    // Lowers to the `neg` instruction, like the unary `-` operator.
+    native func neg(int8 a) -> int8;
+    native func neg(int16 a) -> int16;
+    native func neg(int32 a) -> int32;
+    native func neg(int64 a) -> int64;
+    native func neg(float a) -> float;
+    native func neg(dfloat a) -> dfloat;
+
+    // |a|. The most negative value of a signed width has no positive
+    // counterpart, so abs of it wraps back onto itself -- the same answer
+    // negation gives.
+    native func abs(int8 a) -> int8;
+    native func abs(int16 a) -> int16;
+    native func abs(int32 a) -> int32;
+    native func abs(int64 a) -> int64;
+    native func abs(float a) -> float;
+    native func abs(dfloat a) -> dfloat;
+
+    // The smaller and the larger of two values of one width. Floating point
+    // comparisons follow the operators: a NaN is neither smaller nor larger,
+    // so min and max both hand back the second argument.
+    native func min(int8 a, int8 b) -> int8;
+    native func min(int16 a, int16 b) -> int16;
+    native func min(int32 a, int32 b) -> int32;
+    native func min(int64 a, int64 b) -> int64;
+    native func min(uint8 a, uint8 b) -> uint8;
+    native func min(uint16 a, uint16 b) -> uint16;
+    native func min(uint32 a, uint32 b) -> uint32;
+    native func min(uint64 a, uint64 b) -> uint64;
+    native func min(float a, float b) -> float;
+    native func min(dfloat a, dfloat b) -> dfloat;
+
+    native func max(int8 a, int8 b) -> int8;
+    native func max(int16 a, int16 b) -> int16;
+    native func max(int32 a, int32 b) -> int32;
+    native func max(int64 a, int64 b) -> int64;
+    native func max(uint8 a, uint8 b) -> uint8;
+    native func max(uint16 a, uint16 b) -> uint16;
+    native func max(uint32 a, uint32 b) -> uint32;
+    native func max(uint64 a, uint64 b) -> uint64;
+    native func max(float a, float b) -> float;
+    native func max(dfloat a, dfloat b) -> dfloat;
+
+    // `value` moved into [low, high]. A `low` above `high` names an empty range
+    // and is a runtime error rather than a quietly chosen bound.
+    native func clamp(int8 value, int8 low, int8 high) -> int8;
+    native func clamp(int16 value, int16 low, int16 high) -> int16;
+    native func clamp(int32 value, int32 low, int32 high) -> int32;
+    native func clamp(int64 value, int64 low, int64 high) -> int64;
+    native func clamp(uint8 value, uint8 low, uint8 high) -> uint8;
+    native func clamp(uint16 value, uint16 low, uint16 high) -> uint16;
+    native func clamp(uint32 value, uint32 low, uint32 high) -> uint32;
+    native func clamp(uint64 value, uint64 low, uint64 high) -> uint64;
+    native func clamp(float value, float low, float high) -> float;
+    native func clamp(dfloat value, dfloat low, dfloat high) -> dfloat;
+
+    // -1, 0 or 1, in the operand's own type. signum of a NaN is that NaN: it
+    // has no sign to report.
+    native func signum(int8 a) -> int8;
+    native func signum(int16 a) -> int16;
+    native func signum(int32 a) -> int32;
+    native func signum(int64 a) -> int64;
+    native func signum(float a) -> float;
+    native func signum(dfloat a) -> dfloat;
+
+    // Greatest common divisor and least common multiple, over magnitudes, so
+    // the result is never negative. gcd(0, 0) is 0 and lcm with a 0 operand is
+    // 0. Both wrap on overflow like any other integer result.
+    native func gcd(int8 a, int8 b) -> int8;
+    native func gcd(int16 a, int16 b) -> int16;
+    native func gcd(int32 a, int32 b) -> int32;
+    native func gcd(int64 a, int64 b) -> int64;
+    native func gcd(uint8 a, uint8 b) -> uint8;
+    native func gcd(uint16 a, uint16 b) -> uint16;
+    native func gcd(uint32 a, uint32 b) -> uint32;
+    native func gcd(uint64 a, uint64 b) -> uint64;
+
+    native func lcm(int8 a, int8 b) -> int8;
+    native func lcm(int16 a, int16 b) -> int16;
+    native func lcm(int32 a, int32 b) -> int32;
+    native func lcm(int64 a, int64 b) -> int64;
+    native func lcm(uint8 a, uint8 b) -> uint8;
+    native func lcm(uint16 a, uint16 b) -> uint16;
+    native func lcm(uint32 a, uint32 b) -> uint32;
+    native func lcm(uint64 a, uint64 b) -> uint64;
+
+    // a ** b.
+    //
+    // For integers this is repeated multiplication, wrapping on overflow. A
+    // negative exponent names a fraction, and an integer result is that
+    // fraction truncated toward zero: 1 for a base of 1, +/-1 for a base of -1,
+    // 0 for every other base, and a division-by-zero trap for a base of 0.
+    //
+    // For floats it is the host's `pow`.
+    native func pow(int8 a, int8 b) -> int8;
+    native func pow(int16 a, int16 b) -> int16;
+    native func pow(int32 a, int32 b) -> int32;
+    native func pow(int64 a, int64 b) -> int64;
+    native func pow(uint8 a, uint8 b) -> uint8;
+    native func pow(uint16 a, uint16 b) -> uint16;
+    native func pow(uint32 a, uint32 b) -> uint32;
+    native func pow(uint64 a, uint64 b) -> uint64;
+    native func pow(float a, float b) -> float;
+    native func pow(dfloat a, dfloat b) -> dfloat;
+
+    // ---------------------------------------------------------------------
+    // Transcendentals
+    //
+    // Floating point only. Each one is computed at 64 bits and then rounded
+    // back to the operand's width, so a `float` result carries 32-bit
+    // precision exactly the way a `float` sum does. Domain errors are not
+    // trapped: sqrt of a negative is a NaN, log of 0 is -inf, and they print
+    // that way (src/vm/format.h).
+    // ---------------------------------------------------------------------
+    native func sqrt(float a) -> float;
+    native func sqrt(dfloat a) -> dfloat;
+
+    native func floor(float a) -> float;
+    native func floor(dfloat a) -> dfloat;
+
+    native func ceil(float a) -> float;
+    native func ceil(dfloat a) -> dfloat;
+
+
+    // Halves go away from zero.
+    native func round(float a) -> float;
+    native func round(dfloat a) -> dfloat;
+
+    native func exp(float a) -> float;
+    native func exp(dfloat a) -> dfloat;
+
+    native func log(float a) -> float;
+    native func log(dfloat a) -> dfloat;
+
+    native func log10(float a) -> float;
+    native func log10(dfloat a) -> dfloat;
+
+    native func sin(float a) -> float;
+    native func sin(dfloat a) -> dfloat;
+
+    native func cos(float a) -> float;
+    native func cos(dfloat a) -> dfloat;
+
+    native func tan(float a) -> float;
+    native func tan(dfloat a) -> dfloat;
+
+    native func asin(float a) -> float;
+    native func asin(dfloat a) -> dfloat;
+
+    native func acos(float a) -> float;
+    native func acos(dfloat a) -> dfloat;
+
+    native func atan(float a) -> float;
+    native func atan(dfloat a) -> dfloat;
+
+    native func sinh(float a) -> float;
+    native func sinh(dfloat a) -> dfloat;
+
+    native func cosh(float a) -> float;
+    native func cosh(dfloat a) -> dfloat;
+
+    native func tanh(float a) -> float;
+    native func tanh(dfloat a) -> dfloat;
+
+    // The remainder of a / b, with the sign of a.
+    native func fmod(float a, float b) -> float;
+    native func fmod(dfloat a, dfloat b) -> dfloat;
+
+    // The angle of the point (b, a), in radians, over the full circle.
+    native func atan2(float a, float b) -> float;
+    native func atan2(dfloat a, dfloat b) -> dfloat;
+
+    // ---------------------------------------------------------------------
+    // Constants
+    //
+    // Functions rather than members: a namespace has no `const` members yet
+    // (docs/roadmap.md). They become members when that lands; the values do
+    // not change. Both are `dfloat` -- convert with convertTo for a `float`.
+    // ---------------------------------------------------------------------
+
+    native func pi() -> dfloat;
+    native func e() -> dfloat;
 }

@@ -15,6 +15,7 @@ std::uint8_t ref_kind_byte(sema::RefKind kind) {
     switch (kind) {
         case sema::RefKind::ManagedRef: return bytecode::kRefManaged;
         case sema::RefKind::ManualRef: return bytecode::kRefManual;
+        case sema::RefKind::Dynamic: return bytecode::kRefDynamic;
         case sema::RefKind::Raw: break;
     }
     return bytecode::kRefRaw;
@@ -54,6 +55,10 @@ bytecode::TypeTag Emitter::tag_of(const sema::Type* type) const {
         case sema::TypeKind::Class: return TypeTag::Ref;
         case sema::TypeKind::Memory: return TypeTag::Memory;
         case sema::TypeKind::Null: return TypeTag::Null;
+        // Erased. A `T` slot holds whatever an instantiation put there, so it
+        // starts at `null` -- not instantiated yet -- and carries whatever tag
+        // it was given after that.
+        case sema::TypeKind::TypeParam: return TypeTag::Null;
         case sema::TypeKind::Error: return TypeTag::Void;
     }
     return TypeTag::Void;
@@ -102,6 +107,14 @@ void Emitter::op_u16_u8(Op code, std::uint16_t first, std::uint8_t second) {
     write_op(code);
     write_u16(first);
     write_u8(second);
+}
+
+void Emitter::op_u16_u8_u8(Op code, std::uint16_t first, std::uint8_t second,
+                           std::uint8_t third) {
+    write_op(code);
+    write_u16(first);
+    write_u8(second);
+    write_u8(third);
 }
 
 std::size_t Emitter::emit_jump(Op code) {
@@ -200,9 +213,10 @@ void Emitter::emit_classes() {
 }
 
 bool Emitter::emit(ast::CompilationUnit& unit, std::string_view source_path,
-                   bytecode::Module& out) {
+                   bytecode::Module& out, const diag::SourceManager* sources) {
     (void)unit;
     module_ = &out;
+    sources_ = sources;
     failed_ = false;
 
     out.source_file = out.intern_string(source_path);
@@ -222,6 +236,14 @@ bool Emitter::emit(ast::CompilationUnit& unit, std::string_view source_path,
         program_.root_class ? static_cast<std::int32_t>(program_.root_class->class_id) : -1;
 
     return !failed_;
+}
+
+std::uint32_t Emitter::file_constant_for(diag::SourceLocation loc) {
+    if (!sources_ || loc.file_id == diag::kInvalidFileId ||
+        loc.file_id >= sources_->file_count()) {
+        return module_->source_file;
+    }
+    return module_->intern_string(sources_->path(loc.file_id));
 }
 
 void Emitter::emit_method(sema::MethodSymbol& method) {
@@ -244,6 +266,7 @@ void Emitter::emit_method(sema::MethodSymbol& method) {
     entry.param_count = static_cast<std::uint8_t>(method.params.size());
     entry.frame_size = static_cast<std::uint16_t>(method.frame_size);
     entry.return_type = tag_of(method.return_type);
+    entry.source_file = file_constant_for(method.loc);
     entry.code = std::move(buffer.code);
     entry.lines = std::move(buffer.lines);
 
@@ -276,6 +299,7 @@ void Emitter::emit_field_initializer(sema::ClassSymbol& symbol) {
     entry.param_count = 0;
     entry.frame_size = 0;
     entry.return_type = TypeTag::Void;
+    entry.source_file = file_constant_for(symbol.loc);
     entry.code = std::move(buffer.code);
     entry.lines = std::move(buffer.lines);
 
@@ -298,6 +322,7 @@ void Emitter::emit_procedures(sema::ProcedureSymbol& procedures) {
     entry.param_count = static_cast<std::uint8_t>(procedures.params.size());
     entry.frame_size = static_cast<std::uint16_t>(procedures.frame_size);
     entry.return_type = TypeTag::Void;
+    entry.source_file = file_constant_for(procedures.loc);
     entry.code = std::move(buffer.code);
     entry.lines = std::move(buffer.lines);
 

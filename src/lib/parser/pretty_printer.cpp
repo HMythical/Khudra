@@ -201,11 +201,23 @@ void PrettyPrinter::emit_type(const ast::TypeNode* type) {
             // Preserve the alias as written (`i32` stays `i32`).
             out_.append(type->name.empty() ? ast::builtin_canonical_name(type->builtin)
                                            : type->name);
+            emit_type_arguments(type);
             break;
         case ast::TypeNode::Kind::Named:
             out_.append(type->name);
+            emit_type_arguments(type);
             break;
     }
+}
+
+void PrettyPrinter::emit_type_arguments(const ast::TypeNode* type) {
+    if (type->arguments.empty()) return;
+    out_.append('<');
+    for (std::size_t i = 0; i < type->arguments.size(); ++i) {
+        if (i != 0) out_.append(", ");
+        emit_type(type->arguments[i]);
+    }
+    out_.append('>');
 }
 
 void PrettyPrinter::emit_block(const ast::BlockStmt* block) {

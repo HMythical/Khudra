@@ -230,7 +230,7 @@ bool verify(const Module& module, util::Array<VerificationError>& errors) {
             if (field.name >= module.constants.size()) {
                 errors.push(VerificationError{-1, 0, name + " has a field with no name"});
             }
-            if (field.ref_kind > kRefManual) {
+            if (field.ref_kind > kRefDynamic) {
                 errors.push(VerificationError{-1, 0, name + " has a field with an unknown "
                                                             "reference kind"});
             }

@@ -29,6 +29,7 @@ private:
     void emit_visibility(ast::Visibility visibility, bool explicit_visibility);
 
     void emit_type(const ast::TypeNode* type);
+    void emit_type_arguments(const ast::TypeNode* type);
     void emit_block(const ast::BlockStmt* block);
     void emit_statement(const ast::Stmt* statement);
     // `indent_first` is false when this `if` follows an `else` on the same line.

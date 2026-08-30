@@ -1,0 +1,52 @@
+// khuStdRandom -- a deterministic pseudo-random generator.
+//
+// **Deterministic** is the important word. Every other part of the standard
+// library is reproducible by construction, and this one has to be too, or a
+// program that uses it could not have a golden test and its output could depend
+// on which backend ran it. So:
+//
+//   - An unseeded program starts from a fixed constant. Two runs of the same
+//     program produce the same numbers, under the VM, under `run --native` and
+//     under a built binary alike.
+//   - `seed` chooses the stream. The same seed always produces the same
+//     sequence.
+//
+// The generator is PCG32 (O'Neill, 2014): a 64-bit linear congruential state
+// whose output is a permuted 32-bit slice of it. It is written out in full in
+// src/vm/natives.cpp, which is the single implementation both backends call.
+//
+// **It is not cryptographic**, and nothing here pretends otherwise. It is for
+// simulations, sampling, shuffles and tests -- not for keys, tokens or
+// anything an adversary gets to see the output of.
+//
+// The state is per run, not per object: there is one stream, and `seed` moves
+// it. A program that wants two independent streams does not have them yet.
+
+public namespace khuStdRandom {
+
+    // Restarts the stream from `value`. The same seed always gives the same
+    // sequence.
+    native func seed(int64 value);
+
+    // The next value, over the whole int32 range including negatives.
+    native func nextInt() -> int32;
+
+    // The next value in [0, bound). A bound of 0 or less is a runtime error --
+    // it names an empty range, and there is no value to answer with.
+    // Uniform: the tail that would make low values likelier is rejected rather
+    // than folded in.
+    native func nextInt(int32 bound) -> int32;
+
+    // The next value, over the whole int64 range.
+    native func nextInt64() -> int64;
+
+    // The next value in [0, 1), at the full precision of its width. Never 1.
+    native func nextFloat() -> float;
+    native func nextDouble() -> dfloat;
+
+    native func nextBool() -> bool;
+
+    // Fills `count` bytes of `buffer`. Range-checked against the buffer's real
+    // length, like every other khuStdMem-shaped operation.
+    native func nextBytes(*byte buffer, int32 count);
+}

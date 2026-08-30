@@ -1,0 +1,80 @@
+// khuErrors: recoverable failure as a value, and the codes it reports.
+bring khu::stdlib;
+
+public class Errors {
+    func main() {
+        // A Result is materialized and then told what it is; both builders
+        // return the receiver, so it is one expression.
+        Result<int32> good = Result<int32>().withValue(7);
+        io.printLine(good.ok());
+        io.printLine(good.failed());
+        io.printLine(good.value());
+        io.printLine(good.errorCode());
+        io.printLine(good.unwrapOr(0));
+
+        Result<int32> bad = Result<int32>().withError(khuErrors.parse(), "not a number");
+        io.printLine(bad.ok());
+        io.printLine(bad.failed());
+        io.printLine(bad.errorCode());
+        io.printLine(bad.errorMessage());
+        // unwrapOr is total: it is what a program uses when it has a default.
+        io.printLine(bad.unwrapOr(-1));
+
+        // The same class over a different type.
+        Result<string> text = Result<string>().withValue("held");
+        io.printLine(text.value());
+        io.printLine(Result<string>().withError(khuErrors.io(), "no file").unwrapOr("fallback"));
+
+        // The code table.
+        io.printLine(khuErrors.none());
+        io.printLine(khuErrors.bounds());
+        io.printLine(khuErrors.parse());
+        io.printLine(khuErrors.nullReference());
+        io.printLine(khuErrors.io());
+        io.printLine(khuErrors.divideByZero());
+        io.printLine(khuErrors.notFound());
+        io.printLine(khuErrors.invalidArgument());
+        io.printLine(khuErrors.unsupported());
+        io.printLine(khuErrors.overflow());
+        io.printLine(khuErrors.empty());
+
+        // Option is the other shape: a value or nothing, with nothing to report.
+        Option<int32> some = Option<int32>().withValue(3);
+        Option<int32> none = Option<int32>();
+        io.printLine(some.isPresent());
+        io.printLine(some.value());
+        io.printLine(none.isPresent());
+        io.printLine(none.isEmpty());
+        io.printLine(none.orElse(-1));
+        io.printLine(Option<string>().withNothing().orElse("absent"));
+
+        // Parsing, reported as a value rather than as a sentinel.
+        Parse parse = Parse();
+        Result<int32> parsed = parse.toInt32("42");
+        io.printLine(parsed.ok());
+        io.printLine(parsed.value());
+
+        Result<int32> failed = parse.toInt32("twelve");
+        io.printLine(failed.ok());
+        io.printLine(failed.errorCode());
+        io.printLine(failed.errorMessage());
+        io.printLine(failed.unwrapOr(0));
+
+        // The width is part of the question: this is numeric and is not a uint8.
+        io.printLine(khuStdConv.isNumeric("-1"));
+        io.printLine(khuStdConv.canParseUInt8("-1"));
+        io.printLine(parse.toUInt8("-1").errorMessage());
+        io.printLine(parse.toInt8("300").ok());
+        io.printLine(parse.toInt8("-128").value());
+        io.printLine(parse.toDFloat("2.0e-3").value());
+        io.printLine(parse.toFloat("0.5").value());
+        io.printLine(parse.toUInt64("18446744073709551615").value());
+
+        // A sentinel is still a value a successful parse can produce, which is
+        // exactly why the Result form exists.
+        io.printLine(khuStdConv.parseInt32("-2147483648"));
+        io.printLine(parse.toInt32("-2147483648").ok());
+        io.printLine(khuStdConv.parseInt32("nonsense"));
+        io.printLine(parse.toInt32("nonsense").ok());
+    }
+}

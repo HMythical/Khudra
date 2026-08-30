@@ -1,8 +1,35 @@
-// io -- console input and output.
+// io -- standard input and standard output.
 //
 // `print` writes a value with no separator; `printLine` appends a newline.
 // Both are declared once per type rather than taking a single "printable"
 // parameter, because Khudra has no interfaces yet and no implicit conversion.
+//
+// This namespace is standard *output* (fd 1) and standard input. Standard error
+// (fd 2) is khuStdErr, in lib/err.khu -- a separate stream with the same
+// surface, so a program can say which one it means.
+//
+// ## Rendering
+//
+// Numbers go through the shared formatter (src/vm/format.h), so `io.print` and
+// `khuStdConv.toString` never disagree about what a value looks like. Both float
+// widths print with six significant digits.
+//
+// A class reference has no overload here, because there is no way to declare one
+// that accepts any class -- and no `toString` for a class to override yet
+// (docs/roadmap.md). `io.describe(value)` is the answer: it renders a value of
+// any type, an object as `<ClassName>` and an array as `<array of N>`.
+//
+//     io.printLine(io.describe(someObject));
+//
+// ## Reading
+//
+// `readLine` is the primitive; everything else is it plus a parse. The typed
+// reads follow khuStdConv's rule exactly -- the whole line has to be the value,
+// and a line that is not answers that width's **sentinel**. To tell a sentinel
+// from a real answer, read the line and parse it with `Parse` (lib/errors.khu),
+// which reports failure as a `Result<T>`:
+//
+//     Result<int32> n = Parse().toInt32(io.readLine());
 
 public namespace io {
 
@@ -34,7 +61,66 @@ public namespace io {
     native func printLine(float value);
     native func printLine(dfloat value);
 
+    // Writes a value with no overload of its own: an object as `<ClassName>`,
+    // an array as `<array of N>`, anything else as `print` would.
+    //
+    // Declared nowhere, because its argument is a value of *any* type and
+    // Khudra has no way to write that. The compiler recognizes it, the way it
+    // recognizes khuStdMath.convertTo:
+    //
+    //     native func describe(<any value>) -> string;
+
+    // Writes a value.
+    native func print(Array value);
+    native func printLine(Array value);
+
+    // ---------------------------------------------------------------------
+    // Bytes and the stream itself
+    // ---------------------------------------------------------------------
+
+    // Writes `text` verbatim. The same bytes `print(string)` writes; it is here
+    // so the byte-oriented surface is complete and pairs with writeBytes.
+    native func writeString(string text);
+
+    // Writes `count` bytes from `source`. A null pointer or a count of 0 or
+    // less writes nothing. Nothing checks `count` against an allocation --
+    // there is nothing behind a `*byte` to check it against, which is what
+    // makes it raw.
+    native func writeBytes(*byte source, int32 count);
+
+    // Pushes whatever is buffered out to the stream.
+    native func flush();
+
+    // ---------------------------------------------------------------------
+    // Reading
+    // ---------------------------------------------------------------------
+
     // Reads one line from standard input, without its newline.
     // Returns an empty string at end of input.
     native func readLine() -> string;
+
+    // Reads one byte. `readChar` answers 0 at end of input; `readByte` answers
+    // -1, which is the difference between them -- a byte cannot say "there was
+    // nothing". Both read from the same position readLine does: they are two
+    // views of one stream.
+    native func readChar() -> uint8;
+    native func readByte() -> int32;
+
+    // Reads one line and parses it. `true` for exactly "true", so that reading
+    // back what `print(bool)` wrote round-trips; anything else is false.
+    native func readBool() -> bool;
+
+    // Reads one line and parses it at the named width. A line that is not that
+    // value answers the width's sentinel -- the same values lib/conv.khu lists,
+    // for the same reason. `Parse` over `readLine` is the Result-shaped form.
+    native func readInt8() -> int8;
+    native func readInt16() -> int16;
+    native func readInt32() -> int32;
+    native func readInt64() -> int64;
+    native func readUInt8() -> uint8;
+    native func readUInt16() -> uint16;
+    native func readUInt32() -> uint32;
+    native func readUInt64() -> uint64;
+    native func readFloat() -> float;
+    native func readDFloat() -> dfloat;
 }

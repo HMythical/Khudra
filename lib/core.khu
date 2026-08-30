@@ -25,10 +25,17 @@
 //   An immutable reference to text. String literals live in the bytecode
 //   image's constant pool.
 //
+// Array<T>
+//   A fixed-length, garbage-collected block of T, created with
+//   khuStdCollection.arrayCreate(T, count) and indexed with [].  A fresh array
+//   holds its element type's default; an index outside it is a fatal runtime
+//   error.  See lib/collection.khu.
+//
 // Array
-//   A reference to an array. It has no element type yet, so it can be held,
-//   passed and compared but not indexed -- typed containers arrive with
-//   generics (docs/roadmap.md).
+//   The untyped form, which predates generics.  It is the same runtime thing as
+//   an Array<T> -- element types are erased -- so it holds any array and any
+//   array holds it.  What it cannot do is be indexed: that needs an element
+//   type, and it has not got one.  khu.getType() still returns one of these.
 //
 // *T
 //   A raw pointer. Never traced by the collector.

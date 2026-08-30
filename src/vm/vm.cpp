@@ -12,34 +12,8 @@ namespace khu::vm {
 
 using bytecode::Op;
 
-namespace {
-
-std::uint64_t mask_of(std::uint32_t width) {
-    return width >= 64 ? ~0ull : ((1ull << width) - 1);
-}
-
-std::int64_t sign_extend(std::uint64_t bits, std::uint32_t width) {
-    if (width >= 64) return static_cast<std::int64_t>(bits);
-    std::uint64_t sign = 1ull << (width - 1);
-    bits &= mask_of(width);
-    return static_cast<std::int64_t>((bits ^ sign) - sign);
-}
-
-// Overflow wraps (KHU-PLAN.md, Type rules), so every integer result is
-// truncated back to its declared width.
-Value normalize_int(TypeTag tag, std::uint64_t bits) {
-    std::uint32_t width = bytecode::type_width(tag);
-    if (bytecode::is_signed_integer(tag)) return Value::make_int(tag, sign_extend(bits, width));
-    return Value::make_uint(tag, bits & mask_of(width));
-}
-
-Value normalize_float(TypeTag tag, double value) {
-    // A 32-bit float must round through `float` so its precision is real.
-    if (tag == TypeTag::Float32) return Value::make_float(tag, static_cast<float>(value));
-    return Value::make_float(tag, value);
-}
-
-}  // namespace
+// The width rules -- wrapping overflow and 32-bit float rounding -- live in
+// vm/value.h, shared with the natives so the two cannot drift.
 
 Vm::Vm(const bytecode::Module& module) : module_(module) {}
 
@@ -92,7 +66,12 @@ void Vm::write_barrier(Object* owner, const RuntimeClass& type, std::uint32_t sl
                        const Value& incoming) {
     if (!owner->is_managed()) return;  // manual -> manual is plain ownership
     const bytecode::FieldEntry* field = type.field(slot);
-    if (!field || field->ref_kind != bytecode::kRefManual) return;
+    // A slot declared to hold a manual reference always pins; an erased slot
+    // pins when what is being stored is one, which is what an array does too.
+    if (!field) return;
+    if (field->ref_kind != bytecode::kRefManual && field->ref_kind != bytecode::kRefDynamic) {
+        return;
+    }
 
     Value& current = owner->slots()[slot];
     if (current.tag == TypeTag::Ref && current.as_ref && current.as_ref->is_manual() &&
@@ -104,10 +83,7 @@ void Vm::write_barrier(Object* owner, const RuntimeClass& type, std::uint32_t sl
     }
 }
 
-Vm::~Vm() {
-    uninstall_proc_host(*this);
-    for (std::string* text : runtime_strings_) delete text;
-}
+Vm::~Vm() { uninstall_proc_host(*this); }
 
 Value Vm::pop() {
     if (stack_.empty()) return Value::make_void();
@@ -144,8 +120,12 @@ std::int32_t Vm::read_i32(Frame& frame) {
 // ---------------------------------------------------------------------------
 
 std::string Vm::describe_location(const Frame& frame) const {
-    std::string path(module_.string_at(module_.source_file));
-    if (!frame.method) return path;
+    if (!frame.method) return std::string(module_.string_at(module_.source_file));
+    // An image is built from the program plus the standard library, so the file
+    // a frame names is the method's, not the module's.
+    std::string path(module_.string_at(frame.method->source_file != 0
+                                           ? frame.method->source_file
+                                           : module_.source_file));
 
     // `ip` already points past the instruction being executed, so back up by
     // one byte to land inside it.
@@ -191,6 +171,12 @@ bool Vm::trap(std::string message) {
 
 std::string Vm::render_value(const Value& value) const {
     if (value.tag == TypeTag::Ref && value.as_ref) {
+        // An array has no class descriptor -- its element type is erased and
+        // its class id is not an index into anything -- so it renders as what
+        // it is rather than as class #0.
+        if (value.as_ref->is_array()) {
+            return "<array of " + std::to_string(value.as_ref->array_length()) + ">";
+        }
         const bytecode::ClassEntry* owner =
             module_.class_at(static_cast<std::int32_t>(value.as_ref->header.class_id));
         std::string name = owner ? std::string(module_.string_at(owner->name)) : "object";
@@ -369,69 +355,166 @@ bool Vm::convert(TypeTag from, TypeTag to) {
 // Calls
 // ---------------------------------------------------------------------------
 
+// --- the services vm/natives.h runs a native against -----------------------
+
+void Vm::Services::write_output(const std::string& text) {
+    if (vm_.sink_) {
+        *vm_.sink_ += text;
+    } else {
+        std::fwrite(text.data(), 1, text.size(), stdout);
+    }
+}
+
+void Vm::Services::write_error(const std::string& text) {
+    if (vm_.err_sink_) {
+        *vm_.err_sink_ += text;
+    } else {
+        std::fwrite(text.data(), 1, text.size(), stderr);
+    }
+}
+
+const std::string* Vm::Services::make_string(std::string text) {
+    return vm_.runtime_strings_.intern(std::move(text));
+}
+
+void Vm::Services::flush_output() {
+    if (!vm_.sink_) std::fflush(stdout);
+}
+
+void Vm::Services::flush_error() {
+    if (!vm_.err_sink_) std::fflush(stderr);
+}
+
+int Vm::Services::read_byte() {
+    if (!vm_.input_.empty() || vm_.input_offset_ > 0) {
+        if (vm_.input_offset_ >= vm_.input_.size()) return -1;
+        return static_cast<unsigned char>(vm_.input_[vm_.input_offset_++]);
+    }
+    int byte = std::fgetc(stdin);
+    return byte == EOF ? -1 : byte;
+}
+
+std::string Vm::Services::read_line() {
+    // A program under test is fed a whole transcript up front; only a real run
+    // goes to the terminal.
+    if (!vm_.input_.empty() || vm_.input_offset_ > 0) {
+        std::size_t end = vm_.input_.find('\n', vm_.input_offset_);
+        if (end == std::string::npos) end = vm_.input_.size();
+        std::string line = vm_.input_.substr(vm_.input_offset_, end - vm_.input_offset_);
+        vm_.input_offset_ = end < vm_.input_.size() ? end + 1 : vm_.input_.size();
+        return line;
+    }
+    std::string line;
+    char buffer[4096];
+    if (std::fgets(buffer, sizeof(buffer), stdin)) {
+        line = buffer;
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    }
+    return line;
+}
+
+std::string Vm::Services::render(const Value& value) const { return vm_.render_value(value); }
+
 bool Vm::call_native(std::uint32_t native_id, std::uint8_t argc) {
     auto id = static_cast<bytecode::NativeId>(native_id);
 
-    switch (id) {
-        case bytecode::NativeId::Print:
-        case bytecode::NativeId::PrintLine: {
-            std::string text;
-            for (std::uint8_t i = 0; i < argc; ++i) text = render_value(pop()) + text;
-            if (id == bytecode::NativeId::PrintLine) text += "\n";
-            if (sink_) {
-                *sink_ += text;
+    // Arguments were pushed left to right, so they come off in reverse; the
+    // shared implementation wants them in declaration order.
+    util::Array<Value> arguments;
+    arguments.resize(argc);
+    for (std::size_t i = argc; i > 0; --i) arguments[i - 1] = pop();
+
+    NativeOutcome outcome = invoke_native(services_, id, arguments.data(), argc);
+    if (!outcome.ok) return trap(std::move(outcome.trap));
+    if (bytecode::native_result_count(id) > 0) push(outcome.value);
+    return true;
+}
+
+// The three checks every array instruction makes, so their trap text is
+// written once.
+bool Vm::array_operand(const Value& target, Object*& array) {
+    if (target.is_null_reference()) {
+        return trap("cannot use an array that is null: it is not instantiated yet");
+    }
+    if (target.tag != TypeTag::Ref || !target.as_ref || !target.as_ref->is_array()) {
+        return trap("expected an array, found " + std::string(bytecode::type_tag_name(target.tag)));
+    }
+    array = target.as_ref;
+    return true;
+}
+
+bool Vm::array_index_in_range(const Object& array, std::int64_t index) {
+    std::uint32_t length = array.array_length();
+    if (index < 0 || static_cast<std::uint64_t>(index) >= length) {
+        return trap("array index " + std::to_string(index) + " is out of range for a length of " +
+                    std::to_string(length));
+    }
+    return true;
+}
+
+void Vm::array_write_barrier(const Value& current, const Value& incoming) {
+    if (current.tag == TypeTag::Ref && current.as_ref && current.as_ref->is_manual() &&
+        current.as_ref->header.pin_count > 0) {
+        --current.as_ref->header.pin_count;
+    }
+    if (incoming.tag == TypeTag::Ref && incoming.as_ref && incoming.as_ref->is_manual()) {
+        ++incoming.as_ref->header.pin_count;
+    }
+}
+
+// Reads or writes `pointer[index]` at `element`. Exactly one of `out` and
+// `incoming` is non-null.
+//
+// Nothing bounds-checks this: a `*T` names an address and carries no length,
+// which is the whole difference between it and an `Array<T>`. What is checked
+// is that there is an address at all.
+bool Vm::pointer_element(const Value& pointer, const Value& index, TypeTag element, Value* out,
+                         const Value* incoming) {
+    if (pointer.is_null_reference() || (pointer.tag == TypeTag::Ptr && !pointer.as_raw)) {
+        return trap("cannot reach through a null pointer: it is not instantiated yet");
+    }
+    if (pointer.tag != TypeTag::Ptr) {
+        return trap("expected a raw pointer, found " +
+                    std::string(bytecode::type_tag_name(pointer.tag)));
+    }
+    std::uint32_t width = bytecode::type_width(element);
+    if (width == 0) return trap("a raw pointer to a non-numeric type cannot be indexed");
+    std::size_t stride = width / 8;
+    auto* base = static_cast<unsigned char*>(pointer.as_raw);
+    unsigned char* slot = base + static_cast<std::int64_t>(stride) * index.as_int;
+
+    if (out) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, slot, stride);
+        if (bytecode::is_float(element)) {
+            if (element == TypeTag::Float32) {
+                float narrow = 0.0f;
+                std::memcpy(&narrow, slot, sizeof(narrow));
+                *out = Value::make_float(element, static_cast<double>(narrow));
             } else {
-                std::fwrite(text.data(), 1, text.size(), stdout);
+                double wide = 0.0;
+                std::memcpy(&wide, slot, sizeof(wide));
+                *out = Value::make_float(element, wide);
             }
-            return true;
+        } else {
+            *out = normalize_int(element, bits);
         }
-
-        case bytecode::NativeId::ReadLine: {
-            for (std::uint8_t i = 0; i < argc; ++i) pop();
-            auto* line = new std::string();
-            if (!input_.empty() || input_offset_ > 0) {
-                std::size_t end = input_.find('\n', input_offset_);
-                if (end == std::string::npos) end = input_.size();
-                *line = input_.substr(input_offset_, end - input_offset_);
-                input_offset_ = end < input_.size() ? end + 1 : input_.size();
-            } else {
-                char buffer[4096];
-                if (std::fgets(buffer, sizeof(buffer), stdin)) {
-                    *line = buffer;
-                    while (!line->empty() && (line->back() == '\n' || line->back() == '\r')) {
-                        line->pop_back();
-                    }
-                }
-            }
-            runtime_strings_.push(line);
-            push(Value::make_string(line));
-            return true;
-        }
-
-        case bytecode::NativeId::StdlibLoadObject:
-            // The standard library is linked into every image, so there is
-            // nothing to load; the call exists as an explicit step for a future
-            // loader that has real work to do.
-            for (std::uint8_t i = 0; i < argc; ++i) pop();
-            return true;
-
-        case bytecode::NativeId::GetType:
-        case bytecode::NativeId::LoadRuntimeType: {
-            for (std::uint8_t i = 0; i < argc; ++i) pop();
-            // A type descriptor is an `Array` handle, and `Array` has no
-            // element type yet, so there is nothing observable to hand back.
-            // `null` -- "not instantiated yet" -- is exactly right for an
-            // unresolved descriptor; reflection is a roadmap item.
-            push(Value::make_null());
-            return true;
-        }
-
-        case bytecode::NativeId::None:
-            break;
+        return true;
     }
 
-    for (std::uint8_t i = 0; i < argc; ++i) pop();
-    return trap("unknown native function id " + std::to_string(native_id));
+    if (bytecode::is_float(element)) {
+        if (element == TypeTag::Float32) {
+            auto narrow = static_cast<float>(incoming->as_float);
+            std::memcpy(slot, &narrow, sizeof(narrow));
+        } else {
+            double wide = incoming->as_float;
+            std::memcpy(slot, &wide, sizeof(wide));
+        }
+    } else {
+        std::uint64_t bits = incoming->as_uint;
+        std::memcpy(slot, &bits, stride);
+    }
+    return true;
 }
 
 bool Vm::call_method(std::int32_t method_index, Value receiver, Value& result) {
@@ -494,6 +577,17 @@ bool Vm::execute(Frame& frame, Value& result) {
                 Value under = pop();
                 push(value);
                 push(under);
+                push(value);
+                break;
+            }
+
+            case Op::DupX2: {
+                Value value = pop();
+                Value middle = pop();
+                Value under = pop();
+                push(value);
+                push(under);
+                push(middle);
                 push(value);
                 break;
             }
@@ -564,6 +658,9 @@ bool Vm::execute(Frame& frame, Value& result) {
                                 std::string(bytecode::type_tag_name(receiver.tag)));
                 }
                 Object* object = receiver.as_ref;
+                if (heap_.is_released(object)) {
+                    return trap("use of an object after it was released (use-after-free)");
+                }
                 auto* type = static_cast<RuntimeClass*>(object->header.vtable);
                 if (!type || slot >= type->slot_count) {
                     return trap("field slot " + std::to_string(slot) + " is out of range");
@@ -585,12 +682,90 @@ bool Vm::execute(Frame& frame, Value& result) {
                                 std::string(bytecode::type_tag_name(receiver.tag)));
                 }
                 Object* object = receiver.as_ref;
+                if (heap_.is_released(object)) {
+                    return trap("use of an object after it was released (use-after-free)");
+                }
                 auto* type = static_cast<RuntimeClass*>(object->header.vtable);
                 if (!type || slot >= type->slot_count) {
                     return trap("field slot " + std::to_string(slot) + " is out of range");
                 }
                 write_barrier(object, *type, slot, value);
                 object->slots()[slot] = value;
+                break;
+            }
+
+            case Op::ArrayNew: {
+                auto element = static_cast<TypeTag>(read_u8(frame));
+                Value length = pop();
+                if (length.as_int < 0) {
+                    return trap("cannot create an array of " +
+                                std::to_string(length.as_int) + " elements");
+                }
+                if (length.as_int > 0xffffff) {
+                    return trap("array length " + std::to_string(length.as_int) +
+                                " is larger than this runtime allocates");
+                }
+                // An allocation is a safepoint: collect first when the heap has
+                // grown past its threshold, exactly as materialization does.
+                if (collector_.should_collect()) collector_.collect();
+                Object* array = heap_.allocate_array(
+                    static_cast<std::uint32_t>(length.as_int), element);
+                if (!array) return trap("out of memory creating an array");
+                push(Value::make_ref(array));
+                break;
+            }
+
+            case Op::ArrayLen: {
+                Value target = pop();
+                Object* array = nullptr;
+                if (!array_operand(target, array)) return false;
+                push(Value::make_int(TypeTag::Int32,
+                                     static_cast<std::int64_t>(array->array_length())));
+                break;
+            }
+
+            case Op::ArrayGet: {
+                Value index = pop();
+                Value target = pop();
+                Object* array = nullptr;
+                if (!array_operand(target, array)) return false;
+                if (!array_index_in_range(*array, index.as_int)) return false;
+                push(array->slots()[index.as_int]);
+                break;
+            }
+
+            case Op::ArraySet: {
+                Value value = pop();
+                Value index = pop();
+                Value target = pop();
+                Object* array = nullptr;
+                if (!array_operand(target, array)) return false;
+                if (!array_index_in_range(*array, index.as_int)) return false;
+                Value& slot = array->slots()[index.as_int];
+                // The same barrier a field assignment applies: a manual object
+                // stored in a collected slot is pinned, and overwriting the
+                // slot drops that pin (docs/memory-model.md).
+                array_write_barrier(slot, value);
+                slot = value;
+                break;
+            }
+
+            case Op::PtrGet: {
+                auto element = static_cast<TypeTag>(read_u8(frame));
+                Value index = pop();
+                Value target = pop();
+                Value loaded;
+                if (!pointer_element(target, index, element, &loaded, nullptr)) return false;
+                push(loaded);
+                break;
+            }
+
+            case Op::PtrSet: {
+                auto element = static_cast<TypeTag>(read_u8(frame));
+                Value value = pop();
+                Value index = pop();
+                Value target = pop();
+                if (!pointer_element(target, index, element, nullptr, &value)) return false;
                 break;
             }
 
@@ -745,6 +920,10 @@ bool Vm::execute(Frame& frame, Value& result) {
             case Op::CallVirtual: {
                 std::uint16_t slot = read_u16(frame);
                 std::uint8_t argc = read_u8(frame);
+                // The third operand -- whether the call leaves a value behind
+                // -- is for the native emitter's abstract stack. The
+                // interpreter resolves the method and then knows.
+                read_u8(frame);
 
                 // The receiver sits under the arguments; lift them off to reach
                 // it, then dispatch on its class.
@@ -759,6 +938,10 @@ bool Vm::execute(Frame& frame, Value& result) {
                 if (receiver.tag != TypeTag::Ref || !receiver.as_ref) {
                     return trap("a method call expects an object, found " +
                                 std::string(bytecode::type_tag_name(receiver.tag)));
+                }
+                if (heap_.is_released(receiver.as_ref)) {
+                    return trap("call of a method on an object after it was released "
+                                "(use-after-free)");
                 }
 
                 // A derived override replaced the inherited entry when the

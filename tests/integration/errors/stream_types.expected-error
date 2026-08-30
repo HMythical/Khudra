@@ -1,0 +1,6 @@
+namespace 'khuStdErr' has no member 'parse'
+namespace 'khuErrors' has no member 'errPrintLine'
+no declaration of 'io.printLine' matches (StreamTypes)
+a type is not a value here
+cannot convert string to *uint8 in argument 1 of call to 'io.writeBytes'
+no declaration of 'io.readInt32' takes 1 argument

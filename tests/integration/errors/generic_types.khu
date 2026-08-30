@@ -1,0 +1,42 @@
+// Type parameters are checked, even though they are erased.
+bring khu::stdlib;
+
+public class Box<T> {
+    private T held;
+    public func put(T value) { this.held = value; }
+    public func get() -> T { return this.held; }
+}
+
+public class Plain {
+    public int32 x = 0;
+}
+
+public class Wrong<T> extends Plain {
+}
+
+public class Duplicated<T, T> {
+}
+
+public class GenericTypes {
+    func go() {
+        // The arguments are part of the type: one instantiation is not another.
+        Box<int32> numbers = Box<int32>();
+        Box<string> words = numbers;
+
+        // And they are enforced at every use.
+        numbers.put("text");
+        string wrong = numbers.get();
+
+        // A generic class is written with its arguments, everywhere.
+        Box bare = Box<int32>();
+        Box<int32> inferred = Box();
+
+        // The count has to match.
+        Box<int32, string> tooMany = Box<int32, string>();
+
+        // A type parameter is only a type inside its own class.
+        T stray = null;
+    }
+
+    func main() { }
+}

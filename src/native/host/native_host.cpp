@@ -49,7 +49,6 @@ NativeHost::NativeHost(const bytecode::Module& module, const KhuNativeMethod* me
 NativeHost::~NativeHost() {
     if (khu_proc_engine_host() == reinterpret_cast<KhuVmHost*>(this)) khu_proc_engine_shutdown();
     if (g_host == this) g_host = nullptr;
-    for (std::string* text : runtime_strings_) delete text;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +205,12 @@ void NativeHost::write_barrier(Object* owner, const RuntimeClass& type, std::uin
                                const Value& incoming) {
     if (!owner->is_managed()) return;
     const bytecode::FieldEntry* field = type.field(slot);
-    if (!field || field->ref_kind != bytecode::kRefManual) return;
+    // A slot declared to hold a manual reference always pins; an erased slot
+    // pins when what is being stored is one, which is what an array does too.
+    if (!field) return;
+    if (field->ref_kind != bytecode::kRefManual && field->ref_kind != bytecode::kRefDynamic) {
+        return;
+    }
 
     Value& current = owner->slots()[slot];
     if (current.tag == TypeTag::Ref && current.as_ref && current.as_ref->is_manual() &&
@@ -223,10 +227,13 @@ void NativeHost::write_barrier(Object* owner, const RuntimeClass& type, std::uin
 // ---------------------------------------------------------------------------
 
 std::string NativeHost::describe_location(const KhuFrame& frame) const {
-    std::string path(module_.string_at(module_.source_file));
     const bytecode::MethodEntry* method =
         module_.method_at(static_cast<std::int32_t>(frame.method_index));
-    if (!method) return path;
+    if (!method) return std::string(module_.string_at(module_.source_file));
+    // Same rule as the interpreter's: the file a frame names is the method's,
+    // because an image is built from the program plus the standard library.
+    std::string path(module_.string_at(method->source_file != 0 ? method->source_file
+                                                                : module_.source_file));
 
     // The emitted code publishes `ip` past the instruction in flight, so the
     // same back-up-one-byte rule the interpreter uses lands inside it.
@@ -274,6 +281,12 @@ bool NativeHost::trap(std::string message) {
 
 std::string NativeHost::render_value(const Value& value) const {
     if (value.tag == TypeTag::Ref && value.as_ref) {
+        // An array has no class descriptor -- its element type is erased and
+        // its class id is not an index into anything -- so it renders as what
+        // it is rather than as class #0.
+        if (value.as_ref->is_array()) {
+            return "<array of " + std::to_string(value.as_ref->array_length()) + ">";
+        }
         const bytecode::ClassEntry* owner =
             module_.class_at(static_cast<std::int32_t>(value.as_ref->header.class_id));
         std::string name = owner ? std::string(module_.string_at(owner->name)) : "object";
@@ -408,6 +421,10 @@ int NativeHost::call_virtual(KhuFrame* frame, std::uint16_t slot, std::uint8_t a
              std::string(bytecode::type_tag_name(self.tag)));
         return 1;
     }
+    if (heap_.is_released(self.as_ref)) {
+        trap("call of a method on an object after it was released (use-after-free)");
+        return 1;
+    }
 
     // A derived override replaced the inherited entry when the subclass's
     // vtable was built, so the receiver's own table is the whole of dispatch.
@@ -431,63 +448,85 @@ int NativeHost::call_virtual(KhuFrame* frame, std::uint16_t slot, std::uint8_t a
     return 0;
 }
 
+// --- the services vm/natives.h runs a native against -----------------------
+
+void NativeHost::Services::write_output(const std::string& text) {
+    if (host_.sink_) {
+        *host_.sink_ += text;
+    } else {
+        std::fwrite(text.data(), 1, text.size(), stdout);
+    }
+}
+
+void NativeHost::Services::write_error(const std::string& text) {
+    if (host_.err_sink_) {
+        *host_.err_sink_ += text;
+    } else {
+        std::fwrite(text.data(), 1, text.size(), stderr);
+    }
+}
+
+const std::string* NativeHost::Services::make_string(std::string text) {
+    return host_.runtime_strings_.intern(std::move(text));
+}
+
+void NativeHost::Services::flush_output() {
+    if (!host_.sink_) std::fflush(stdout);
+}
+
+void NativeHost::Services::flush_error() {
+    if (!host_.err_sink_) std::fflush(stderr);
+}
+
+int NativeHost::Services::read_byte() {
+    if (!host_.input_.empty() || host_.input_offset_ > 0) {
+        if (host_.input_offset_ >= host_.input_.size()) return -1;
+        return static_cast<unsigned char>(host_.input_[host_.input_offset_++]);
+    }
+    int byte = std::fgetc(stdin);
+    return byte == EOF ? -1 : byte;
+}
+
+std::string NativeHost::Services::read_line() {
+    if (!host_.input_.empty() || host_.input_offset_ > 0) {
+        std::size_t end = host_.input_.find('\n', host_.input_offset_);
+        if (end == std::string::npos) end = host_.input_.size();
+        std::string line = host_.input_.substr(host_.input_offset_, end - host_.input_offset_);
+        host_.input_offset_ = end < host_.input_.size() ? end + 1 : host_.input_.size();
+        return line;
+    }
+    std::string line;
+    char buffer[4096];
+    if (std::fgets(buffer, sizeof(buffer), stdin)) {
+        line = buffer;
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    }
+    return line;
+}
+
+std::string NativeHost::Services::render(const Value& value) const {
+    return host_.render_value(value);
+}
+
 int NativeHost::call_native(KhuFrame* frame, std::uint16_t native_id, std::uint8_t argc,
                             const KhuValue* argv, KhuValue* out, bool expects_result) {
-    (void)frame;
+    (void)frame;   // the frame is already linked; trap() walks the chain
+    (void)expects_result;
     auto id = static_cast<bytecode::NativeId>(native_id);
 
-    switch (id) {
-        case bytecode::NativeId::Print:
-        case bytecode::NativeId::PrintLine: {
-            // The interpreter builds the text by popping and prepending, which
-            // is the same order as walking the arguments as they were pushed.
-            std::string text;
-            for (std::uint8_t i = 0; i < argc; ++i) text += render_value(to_value(argv[i]));
-            if (id == bytecode::NativeId::PrintLine) text += "\n";
-            if (sink_) {
-                *sink_ += text;
-            } else {
-                std::fwrite(text.data(), 1, text.size(), stdout);
-            }
-            return 0;
-        }
+    // The emitted C leaves the arguments in declaration order, which is the
+    // order the shared implementation wants them in.
+    util::Array<Value> arguments;
+    arguments.resize(argc);
+    for (std::uint8_t i = 0; i < argc; ++i) arguments[i] = to_value(argv[i]);
 
-        case bytecode::NativeId::ReadLine: {
-            auto* line = new std::string();
-            if (!input_.empty() || input_offset_ > 0) {
-                std::size_t end = input_.find('\n', input_offset_);
-                if (end == std::string::npos) end = input_.size();
-                *line = input_.substr(input_offset_, end - input_offset_);
-                input_offset_ = end < input_.size() ? end + 1 : input_.size();
-            } else {
-                char buffer[4096];
-                if (std::fgets(buffer, sizeof(buffer), stdin)) {
-                    *line = buffer;
-                    while (!line->empty() && (line->back() == '\n' || line->back() == '\r')) {
-                        line->pop_back();
-                    }
-                }
-            }
-            runtime_strings_.push(line);
-            *out = from_value(Value::make_string(line));
-            return 0;
-        }
-
-        case bytecode::NativeId::StdlibLoadObject:
-            return 0;
-
-        case bytecode::NativeId::GetType:
-        case bytecode::NativeId::LoadRuntimeType:
-            *out = khu_make_null();
-            return 0;
-
-        case bytecode::NativeId::None:
-            break;
+    khu::vm::NativeOutcome outcome = khu::vm::invoke_native(services_, id, arguments.data(), argc);
+    if (!outcome.ok) {
+        trap(std::move(outcome.trap));
+        return 1;
     }
-
-    (void)expects_result;
-    trap("unknown native function id " + std::to_string(native_id));
-    return 1;
+    if (bytecode::native_result_count(id) > 0) *out = from_value(outcome.value);
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +547,10 @@ int NativeHost::getfield(KhuFrame* frame, const KhuValue* receiver, std::uint16_
         return 1;
     }
     Object* object = self.as_ref;
+    if (heap_.is_released(object)) {
+        trap("use of an object after it was released (use-after-free)");
+        return 1;
+    }
     auto* type = static_cast<RuntimeClass*>(object->header.vtable);
     if (!type || slot >= type->slot_count) {
         trap("field slot " + std::to_string(slot) + " is out of range");
@@ -532,6 +575,10 @@ int NativeHost::putfield(KhuFrame* frame, const KhuValue* receiver, std::uint16_
         return 1;
     }
     Object* object = self.as_ref;
+    if (heap_.is_released(object)) {
+        trap("use of an object after it was released (use-after-free)");
+        return 1;
+    }
     auto* type = static_cast<RuntimeClass*>(object->header.vtable);
     if (!type || slot >= type->slot_count) {
         trap("field slot " + std::to_string(slot) + " is out of range");
@@ -576,6 +623,172 @@ int NativeHost::pin(KhuFrame* frame, const KhuValue* target, bool pin_it) {
         ++count;
     } else if (count > 0) {
         --count;
+    }
+    return 0;
+}
+
+// --- arrays ----------------------------------------------------------------
+//
+// The same three checks, in the same order, with the same words as
+// KhudraVm's: an array instruction that trapped under the interpreter has to
+// trap identically here (docs/native.md, section 5).
+
+bool NativeHost::array_operand(const Value& target, Object*& array) {
+    if (target.is_null_reference()) {
+        return trap("cannot use an array that is null: it is not instantiated yet");
+    }
+    if (target.tag != TypeTag::Ref || !target.as_ref || !target.as_ref->is_array()) {
+        return trap("expected an array, found " +
+                    std::string(bytecode::type_tag_name(target.tag)));
+    }
+    array = target.as_ref;
+    return true;
+}
+
+bool NativeHost::array_index_in_range(const Object& array, std::int64_t index) {
+    std::uint32_t length = array.array_length();
+    if (index < 0 || static_cast<std::uint64_t>(index) >= length) {
+        return trap("array index " + std::to_string(index) +
+                    " is out of range for a length of " + std::to_string(length));
+    }
+    return true;
+}
+
+int NativeHost::array_new(KhuFrame* frame, std::uint8_t element, const KhuValue* length_in,
+                          KhuValue* out) {
+    (void)frame;
+    Value length = to_value(*length_in);
+    if (length.as_int < 0) {
+        trap("cannot create an array of " + std::to_string(length.as_int) + " elements");
+        return 1;
+    }
+    if (length.as_int > 0xffffff) {
+        trap("array length " + std::to_string(length.as_int) +
+             " is larger than this runtime allocates");
+        return 1;
+    }
+    if (collector_.should_collect()) collector_.collect();
+    Object* array = heap_.allocate_array(static_cast<std::uint32_t>(length.as_int),
+                                         static_cast<TypeTag>(element));
+    if (!array) {
+        trap("out of memory creating an array");
+        return 1;
+    }
+    *out = from_value(Value::make_ref(array));
+    return 0;
+}
+
+int NativeHost::array_len(KhuFrame* frame, const KhuValue* array_in, KhuValue* out) {
+    (void)frame;
+    Object* array = nullptr;
+    if (!array_operand(to_value(*array_in), array)) return 1;
+    *out = from_value(
+        Value::make_int(TypeTag::Int32, static_cast<std::int64_t>(array->array_length())));
+    return 0;
+}
+
+int NativeHost::array_get(KhuFrame* frame, const KhuValue* array_in, const KhuValue* index_in,
+                          KhuValue* out) {
+    (void)frame;
+    Object* array = nullptr;
+    if (!array_operand(to_value(*array_in), array)) return 1;
+    std::int64_t index = to_value(*index_in).as_int;
+    if (!array_index_in_range(*array, index)) return 1;
+    *out = from_value(array->slots()[index]);
+    return 0;
+}
+
+int NativeHost::array_set(KhuFrame* frame, const KhuValue* array_in, const KhuValue* index_in,
+                          const KhuValue* value_in) {
+    (void)frame;
+    Object* array = nullptr;
+    if (!array_operand(to_value(*array_in), array)) return 1;
+    std::int64_t index = to_value(*index_in).as_int;
+    if (!array_index_in_range(*array, index)) return 1;
+    Value value = to_value(*value_in);
+    Value& slot = array->slots()[index];
+    // A manual object stored into a collected slot is pinned; overwriting the
+    // slot drops that pin. khu_rt_putfield does the same for a field.
+    if (slot.tag == TypeTag::Ref && slot.as_ref && slot.as_ref->is_manual() &&
+        slot.as_ref->header.pin_count > 0) {
+        --slot.as_ref->header.pin_count;
+    }
+    if (value.tag == TypeTag::Ref && value.as_ref && value.as_ref->is_manual()) {
+        ++value.as_ref->header.pin_count;
+    }
+    slot = value;
+    return 0;
+}
+
+// The same rule the interpreter applies, word for word in its trap text.
+bool NativeHost::pointer_element(const Value& pointer, const Value& index,
+                                 bytecode::TypeTag element, Value* out, const Value* incoming) {
+    if (pointer.is_null_reference() || (pointer.tag == TypeTag::Ptr && !pointer.as_raw)) {
+        return trap("cannot reach through a null pointer: it is not instantiated yet");
+    }
+    if (pointer.tag != TypeTag::Ptr) {
+        return trap("expected a raw pointer, found " +
+                    std::string(bytecode::type_tag_name(pointer.tag)));
+    }
+    std::uint32_t width = bytecode::type_width(element);
+    if (width == 0) return trap("a raw pointer to a non-numeric type cannot be indexed");
+    std::size_t stride = width / 8;
+    auto* base = static_cast<unsigned char*>(pointer.as_raw);
+    unsigned char* slot = base + static_cast<std::int64_t>(stride) * index.as_int;
+
+    if (out) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, slot, stride);
+        if (bytecode::is_float(element)) {
+            if (element == TypeTag::Float32) {
+                float narrow = 0.0f;
+                std::memcpy(&narrow, slot, sizeof(narrow));
+                *out = Value::make_float(element, static_cast<double>(narrow));
+            } else {
+                double wide = 0.0;
+                std::memcpy(&wide, slot, sizeof(wide));
+                *out = Value::make_float(element, wide);
+            }
+        } else {
+            *out = khu::vm::normalize_int(element, bits);
+        }
+        return true;
+    }
+
+    if (bytecode::is_float(element)) {
+        if (element == TypeTag::Float32) {
+            auto narrow = static_cast<float>(incoming->as_float);
+            std::memcpy(slot, &narrow, sizeof(narrow));
+        } else {
+            double wide = incoming->as_float;
+            std::memcpy(slot, &wide, sizeof(wide));
+        }
+    } else {
+        std::uint64_t bits = incoming->as_uint;
+        std::memcpy(slot, &bits, stride);
+    }
+    return true;
+}
+
+int NativeHost::ptr_get(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                        std::uint8_t element, KhuValue* out) {
+    (void)frame;
+    Value loaded;
+    if (!pointer_element(to_value(*pointer), to_value(*index),
+                         static_cast<bytecode::TypeTag>(element), &loaded, nullptr)) {
+        return 1;
+    }
+    *out = from_value(loaded);
+    return 0;
+}
+
+int NativeHost::ptr_set(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                        std::uint8_t element, const KhuValue* value) {
+    (void)frame;
+    Value incoming = to_value(*value);
+    if (!pointer_element(to_value(*pointer), to_value(*index),
+                         static_cast<bytecode::TypeTag>(element), nullptr, &incoming)) {
+        return 1;
     }
     return 0;
 }
@@ -880,6 +1093,34 @@ int khu_rt_call_native(KhuFrame* frame, uint16_t native_id, uint8_t argc, const 
                        KhuValue* out, int expects_result) {
     return khu::native::current_host()->call_native(frame, native_id, argc, argv, out,
                                                     expects_result != 0);
+}
+
+int khu_rt_array_new(KhuFrame* frame, uint8_t element, const KhuValue* length, KhuValue* out) {
+    return khu::native::current_host()->array_new(frame, element, length, out);
+}
+
+int khu_rt_array_len(KhuFrame* frame, const KhuValue* array, KhuValue* out) {
+    return khu::native::current_host()->array_len(frame, array, out);
+}
+
+int khu_rt_array_get(KhuFrame* frame, const KhuValue* array, const KhuValue* index,
+                     KhuValue* out) {
+    return khu::native::current_host()->array_get(frame, array, index, out);
+}
+
+int khu_rt_array_set(KhuFrame* frame, const KhuValue* array, const KhuValue* index,
+                     const KhuValue* value) {
+    return khu::native::current_host()->array_set(frame, array, index, value);
+}
+
+int khu_rt_ptr_get(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                   uint8_t element, KhuValue* out) {
+    return khu::native::current_host()->ptr_get(frame, pointer, index, element, out);
+}
+
+int khu_rt_ptr_set(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                   uint8_t element, const KhuValue* value) {
+    return khu::native::current_host()->ptr_set(frame, pointer, index, element, value);
 }
 
 int khu_rt_ref_same(const KhuValue* left, const KhuValue* right) {

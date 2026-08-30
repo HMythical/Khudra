@@ -1,0 +1,47 @@
+true
+false
+7
+0
+7
+false
+true
+2
+not a number
+-1
+held
+fallback
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+true
+3
+false
+true
+-1
+absent
+true
+42
+false
+2
+not int32: "twelve"
+0
+true
+false
+not uint8: "-1"
+false
+-128
+0.002
+0.5
+18446744073709551615
+-2147483648
+true
+-2147483648
+false

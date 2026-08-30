@@ -1,0 +1,10 @@
+cannot convert string to int32 in argument 1 of call to 'List.add'
+cannot convert int32 to string in the initializer of 'first'
+cannot convert List<int32> to List<string> in the initializer of 'words'
+cannot convert int32 to string in argument 1 of call to 'Map.put'
+cannot convert string to int32 in argument 2 of call to 'Map.put'
+'List' takes 1 type argument, not 0
+'Stack' takes 1 type argument, not 2
+cannot convert List<int32> to Array in argument 1 of call to 'khuStdCollection.arraySize'
+a type is not a value here
+khuStdCollection.sameValue takes 2 arguments, found 1

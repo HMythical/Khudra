@@ -1,0 +1,25 @@
+// A Result carries its type parameter the way any other generic class does, and
+// khuErrors is a namespace of codes rather than a place values live.
+bring khu::stdlib;
+
+public class ResultTypes {
+    func go() {
+        // The parameter is part of the type.
+        Result<int32> number = Result<int32>().withValue(1);
+        Result<string> text = number;
+
+        // And the builders take what the parameter says.
+        Result<int32> wrong = Result<int32>().withValue("text");
+
+        // A code is an int32, and a message is a string.
+        Result<int32> bad = Result<int32>().withError("parse", 2);
+
+        // khuErrors holds codes, not values: Result and Option are classes.
+        Result<int32> nested = khuErrors.Result();
+
+        // A Result is written with its argument, like every generic class.
+        Result plain = Result<int32>().withValue(1);
+    }
+
+    func main() { }
+}

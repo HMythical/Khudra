@@ -1,0 +1,85 @@
+// Array<T>: typed, fixed-length, garbage collected, indexed with [].
+bring khu::stdlib;
+
+public class Point {
+    public int32 x = 0;
+    public Point(int32 value) { this.x = value; }
+}
+
+public class Arrays {
+    func main() {
+        // A fresh array holds its element type's default.
+        Array<int32> counts = khuStdCollection.arrayCreate(int32, 4);
+        io.printLine(khuStdCollection.arraySize(counts));
+        io.printLine(counts[0]);
+
+        counts[0] = 5;
+        counts[3] = khuStdMath.add(counts[0], 2);
+        io.printLine(counts[0]);
+        io.printLine(counts[3]);
+        io.printLine(counts[1]);
+
+        // An assignment is an expression, and its value is what was stored.
+        int32 kept = (counts[1] = 9);
+        io.printLine(kept);
+        io.printLine(counts[1]);
+
+        // A reference element starts as null -- not instantiated yet.
+        Array<string> names = khuStdCollection.arrayCreate(string, 3);
+        io.printLine(names[0]);
+        names[0] = "Khudra";
+        names[1] = khuStdString.toUpperCase(names[0]);
+        io.printLine(names[0]);
+        io.printLine(names[1]);
+        io.printLine(khuStdString.length(names[0]));
+        io.printLine(names[2]);
+
+        // Other element types, including bool and the float widths.
+        Array<bool> flags = khuStdCollection.arrayCreate(bool, 2);
+        io.printLine(flags[0]);
+        flags[1] = true;
+        io.printLine(flags[1]);
+
+        Array<dfloat> ratios = khuStdCollection.arrayCreate(dfloat, 2);
+        io.printLine(ratios[0]);
+        ratios[0] = 1.5;
+        io.printLine(ratios[0]);
+
+        Array<uint8> bytes = khuStdCollection.arrayCreate(uint8, 2);
+        bytes[0] = 200;
+        io.printLine(bytes[0]);
+
+        // Arrays of objects, and arrays of arrays.
+        Array<Point> points = khuStdCollection.arrayCreate(Point, 2);
+        points[0] = Point(11);
+        io.printLine(points[0].x);
+
+        Array<Array<int32>> grid = khuStdCollection.arrayCreate(Array<int32>, 2);
+        grid[0] = counts;
+        io.printLine(grid[0][3]);
+        io.printLine(khuStdCollection.arraySize(grid));
+
+        // A bare `Array` is the untyped view of the same thing: it holds any
+        // array and reports its length, and that is all it can do.
+        Array bare = counts;
+        io.printLine(khuStdCollection.arraySize(bare));
+
+        // An empty array is legal and has no elements.
+        Array<int32> none = khuStdCollection.arrayCreate(int32, 0);
+        io.printLine(khuStdCollection.arraySize(none));
+
+        // A string is indexed too, and it yields a byte.
+        string word = "Khudra";
+        io.printLine(word[0]);
+        io.printLine(khuStdConv.toChar(word[1]));
+
+        // An index computed in a loop, which is what an array is for.
+        int32 i = 0;
+        int32 total = 0;
+        while (i < khuStdCollection.arraySize(counts)) {
+            total = khuStdMath.add(total, counts[i]);
+            i = khuStdMath.add(i, 1);
+        }
+        io.printLine(total);
+    }
+}

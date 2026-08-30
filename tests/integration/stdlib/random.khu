@@ -1,0 +1,73 @@
+// khuStdRandom: pseudo-random, and reproducible on purpose.
+//
+// This program has a golden file at all only because the generator is
+// deterministic. An unseeded run starts from a fixed constant and a seeded one
+// starts from the seed, so the same numbers come out under the VM, under
+// `run --native` and under a built binary.
+bring khu::stdlib;
+
+public class Random {
+    func main() {
+        // Unseeded: the same sequence on every run.
+        io.printLine(khuStdRandom.nextInt());
+        io.printLine(khuStdRandom.nextInt());
+        io.printLine(khuStdRandom.nextBool());
+
+        // A seed chooses the stream, and the same seed replays it.
+        khuStdRandom.seed(1);
+        int32 first = khuStdRandom.nextInt();
+        int32 second = khuStdRandom.nextInt();
+        khuStdRandom.seed(1);
+        io.printLine(khuStdRandom.nextInt() == first);
+        io.printLine(khuStdRandom.nextInt() == second);
+
+        // Different seeds are different streams.
+        khuStdRandom.seed(2);
+        io.printLine(khuStdRandom.nextInt() == first);
+
+        khuStdRandom.seed(7);
+        io.printLine(khuStdRandom.nextInt());
+        io.printLine(khuStdRandom.nextInt64());
+        io.printLine(khuStdRandom.nextFloat());
+        io.printLine(khuStdRandom.nextDouble());
+        io.printLine(khuStdRandom.nextBool());
+
+        // A bound keeps every value inside it, and covers it.
+        khuStdRandom.seed(99);
+        int32 i = 0;
+        int32 lowest = 6;
+        int32 highest = -1;
+        int32 outside = 0;
+        while (i < 500) {
+            int32 roll = khuStdRandom.nextInt(6);
+            if (roll < 0) { outside = khuStdMath.add(outside, 1); }
+            if (roll > 5) { outside = khuStdMath.add(outside, 1); }
+            lowest = khuStdMath.min(lowest, roll);
+            highest = khuStdMath.max(highest, roll);
+            i = khuStdMath.add(i, 1);
+        }
+        io.printLine(outside);
+        io.printLine(lowest);
+        io.printLine(highest);
+
+        // nextFloat and nextDouble stay inside [0, 1).
+        khuStdRandom.seed(3);
+        int32 j = 0;
+        int32 offRange = 0;
+        while (j < 200) {
+            dfloat d = khuStdRandom.nextDouble();
+            if (d < 0.0) { offRange = khuStdMath.add(offRange, 1); }
+            if (d >= 1.0) { offRange = khuStdMath.add(offRange, 1); }
+            j = khuStdMath.add(j, 1);
+        }
+        io.printLine(offRange);
+
+        // nextBytes fills a buffer, range-checked like every other byte call.
+        khuStdRandom.seed(11);
+        *byte buffer = khuStdMem.alloc(8);
+        khuStdRandom.nextBytes(buffer, 8);
+        io.printLine(buffer[0]);
+        io.printLine(buffer[7]);
+        khuStdMem.release(buffer);
+    }
+}

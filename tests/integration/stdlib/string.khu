@@ -1,0 +1,75 @@
+// khuStdString: the whole string surface, including its edges.
+bring khu::stdlib;
+
+public class Strings {
+    func main() {
+        string greeting = "Hello, Khudra";
+        string empty = "";
+
+        // Size and access.
+        io.printLine(khuStdString.length(greeting));
+        io.printLine(khuStdString.length(empty));
+        io.printLine(khuStdString.charAt(greeting, 0));
+        io.printLine(khuStdConv.toChar(khuStdString.charAt(greeting, 7)));
+        // Out of range answers 0 rather than killing the program.
+        io.printLine(khuStdString.charAt(greeting, 999));
+        io.printLine(khuStdString.charAt(greeting, -1));
+        io.printLine(khuStdString.isEmpty(empty));
+        io.printLine(khuStdString.isEmpty(greeting));
+        io.printLine(khuStdString.isBlank("  \t "));
+        io.printLine(khuStdString.isBlank(" x "));
+
+        // Substrings clamp, and a reversed range is empty.
+        io.printLine(khuStdString.substring(greeting, 7, 13));
+        io.printLine(khuStdString.substring(greeting, 0, 5));
+        io.printLine(khuStdString.substring(greeting, 7, 999));
+        io.printLine(khuStdString.substring(greeting, -4, 5));
+        io.printLine(khuStdString.concat("[", khuStdString.substring(greeting, 9, 3), "]"));
+
+        // Building.
+        io.printLine(khuStdString.concat("a", "b"));
+        io.printLine(khuStdString.concat("a", "b", "c", "d", "e", "f"));
+        io.printLine(khuStdString.concat(greeting, "!", khuStdConv.toString(42)));
+        io.printLine(khuStdString.repeat("ab", 3));
+        io.printLine(khuStdString.concat("[", khuStdString.repeat("ab", 0), "]"));
+        io.printLine(khuStdString.concat("[", khuStdString.repeat("ab", -2), "]"));
+
+        // Searching.
+        io.printLine(khuStdString.indexOf(greeting, "l"));
+        io.printLine(khuStdString.indexOf(greeting, "l", 4));
+        io.printLine(khuStdString.indexOf(greeting, "zzz"));
+        io.printLine(khuStdString.indexOf(greeting, ""));
+        io.printLine(khuStdString.lastIndexOf(greeting, "l"));
+        io.printLine(khuStdString.lastIndexOf(greeting, "zzz"));
+        io.printLine(khuStdString.contains(greeting, "Khudra"));
+        io.printLine(khuStdString.contains(greeting, "khudra"));
+        io.printLine(khuStdString.startsWith(greeting, "Hello"));
+        io.printLine(khuStdString.endsWith(greeting, "Khudra"));
+        io.printLine(khuStdString.startsWith(empty, ""));
+
+        // Comparing. Exactly -1, 0 or 1.
+        io.printLine(khuStdString.equals(greeting, "Hello, Khudra"));
+        io.printLine(khuStdString.equals(greeting, "hello, khudra"));
+        io.printLine(khuStdString.equalsIgnoreCase(greeting, "hello, KHUDRA"));
+        io.printLine(khuStdString.compareTo("a", "b"));
+        io.printLine(khuStdString.compareTo("b", "a"));
+        io.printLine(khuStdString.compareTo("a", "a"));
+        io.printLine(khuStdString.compareTo("abc", "abcd"));
+        io.printLine(khuStdString.compareToIgnoreCase("ABC", "abc"));
+
+        // Deriving.
+        io.printLine(khuStdString.toUpperCase(greeting));
+        io.printLine(khuStdString.toLowerCase(greeting));
+        io.printLine(khuStdString.concat("[", khuStdString.trim("  spaced  "), "]"));
+        io.printLine(khuStdString.concat("[", khuStdString.trimStart("  spaced  "), "]"));
+        io.printLine(khuStdString.concat("[", khuStdString.trimEnd("  spaced  "), "]"));
+        io.printLine(khuStdString.replace("a-b-c", "-", "+"));
+        io.printLine(khuStdString.replaceAll("a-b-c", "-", "+"));
+        io.printLine(khuStdString.replaceAll("aaa", "aa", "b"));
+        io.printLine(khuStdString.replaceAll("a-b-c", "", "+"));
+        io.printLine(khuStdString.replaceAll("a-b-c", "-", ""));
+
+        // The argument is never modified: it may be a constant in the image.
+        io.printLine(greeting);
+    }
+}

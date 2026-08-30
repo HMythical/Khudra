@@ -1,0 +1,277 @@
+// khuErrors -- recoverable failure, as a value.
+//
+// Khudra has no exceptions, and it is not getting any. A runtime failure that
+// means the program is wrong -- dividing by zero, dereferencing null, indexing
+// past the end of an array -- is a fatal trap, and stays one. A failure that
+// means the *input* is wrong is an ordinary answer, and this file is how it is
+// carried back.
+//
+// Three things live here:
+//
+//   Result<T>   a value or a failure, never both
+//   Option<T>   a value or nothing, with no failure attached
+//   khuErrors   the code table both of them report through
+//
+// `Result` and `Option` are classes rather than members of the `khuErrors`
+// namespace because a namespace holds only native declarations: it is where the
+// toolchain's own operations live, and these are ordinary Khudra code. Their
+// names are therefore global, and a program cannot declare its own `Result`.
+//
+// ## Building one
+//
+// Khudra has no static context -- no `Result.ok(...)`, because there is no
+// receiver for it to be called on -- so a Result is materialized and then told
+// what it is, in one expression:
+//
+//     Result<int32> good = Result<int32>().withValue(7);
+//     Result<int32> bad  = Result<int32>().withError(khuErrors.parse(), "not a number");
+//
+// Both builders return the receiver, so the result of the expression is the
+// finished value. A `Result` that has been built is never rebuilt: nothing here
+// mutates one after it has been handed out.
+//
+// ## Reading one
+//
+// `value()` **traps** when the Result is a failure. It has to: generics are
+// erased, so a `T` that was never written holds `null` whatever `T` is, and
+// handing that back as an `int32` would be a lie the checker had already
+// signed off on. Ask `ok()` first, or use `unwrapOr`, which is total.
+//
+//     if (r.ok()) { io.printLine(r.value()); }
+//     io.printLine(r.unwrapOr(0));
+//
+// `recover(func)` is not here: it needs closures, which Khudra does not have
+// (docs/roadmap.md). The manual idiom is the `if` above.
+
+public namespace khuErrors {
+
+    // ---------------------------------------------------------------------
+    // The error-code table
+    //
+    // A code is what a program branches on; the message beside it in a Result
+    // is what a person reads. They are functions rather than constants because
+    // a namespace has no const members yet (docs/roadmap.md) -- the values do
+    // not change when that lands.
+    // ---------------------------------------------------------------------
+
+    native func none() -> int32;             // 0 -- no error
+    native func bounds() -> int32;           // 1 -- an index outside a container
+    native func parse() -> int32;            // 2 -- text that is not the value it should name
+    native func nullReference() -> int32;    // 3 -- not instantiated yet
+    native func io() -> int32;               // 4 -- input or output failed
+    native func divideByZero() -> int32;     // 5
+    native func notFound() -> int32;         // 6 -- a lookup with no match
+    native func invalidArgument() -> int32;  // 7 -- an argument the operation cannot use
+    native func unsupported() -> int32;      // 8 -- not implemented on this build
+    native func overflow() -> int32;         // 9 -- a value too large for its destination
+    native func empty() -> int32;            // 10 -- a container with nothing in it
+
+    // ---------------------------------------------------------------------
+    // Failing
+    // ---------------------------------------------------------------------
+
+    // Ends the program with `message`, the way any other fatal runtime error
+    // does: the same trap text, the same stack trace, the same exit code.
+    //
+    // This is not error *handling* -- that is what Result is for. It is how
+    // library code says that what it was asked to do has no answer at all,
+    // which is why `Result.value()` on a failure calls it rather than
+    // inventing a value.
+    native func fail(string message);
+}
+
+public class Result<T> {
+    private T held;
+    private bool succeeded = false;
+    private int32 code = 0;
+    private string message = "";
+
+    // --- building ---------------------------------------------------------
+
+    // Marks this Result a success carrying `value`, and returns it.
+    public func withValue(T value) -> Result<T> {
+        this.held = value;
+        this.succeeded = true;
+        this.code = khuErrors.none();
+        this.message = "";
+        return this;
+    }
+
+    // Marks this Result a failure carrying `code` and `message`, and returns
+    // it. The code is what a program branches on; the message is what a person
+    // reads.
+    public func withError(int32 code, string message) -> Result<T> {
+        this.succeeded = false;
+        this.code = code;
+        this.message = message;
+        return this;
+    }
+
+    // --- reading ----------------------------------------------------------
+
+    public func ok() -> bool { return this.succeeded; }
+    public func failed() -> bool { return !this.succeeded; }
+
+    // The value. **Traps** unless ok(): there is no value to hand back, and no
+    // honest default to invent for an erased T.
+    public func value() -> T {
+        if (!this.succeeded) {
+            khuErrors.fail(khuStdString.concat("value() on a failed Result: ", this.message));
+        }
+        return this.held;
+    }
+
+    // The value, or `fallback` when this is a failure. Total: it never traps.
+    public func unwrapOr(T fallback) -> T {
+        if (this.succeeded) { return this.held; }
+        return fallback;
+    }
+
+    public func errorCode() -> int32 { return this.code; }
+    public func errorMessage() -> string { return this.message; }
+}
+
+// Option<T> -- a value or nothing.
+//
+// Distinct from Result: "no value" is not the same as "the operation failed",
+// and a lookup that finds nothing has nothing to report but that.
+public class Option<T> {
+    private T held;
+    private bool present = false;
+
+    public func withValue(T value) -> Option<T> {
+        this.held = value;
+        this.present = true;
+        return this;
+    }
+
+    // Marks this Option empty, and returns it. A freshly materialized Option is
+    // already empty; this is for saying so.
+    public func withNothing() -> Option<T> {
+        this.present = false;
+        return this;
+    }
+
+    public func isPresent() -> bool { return this.present; }
+    public func isEmpty() -> bool { return !this.present; }
+
+    // The value. **Traps** when the Option is empty, for the same reason
+    // Result.value() does.
+    public func value() -> T {
+        if (!this.present) {
+            khuErrors.fail("value() on an empty Option");
+        }
+        return this.held;
+    }
+
+    public func orElse(T fallback) -> T {
+        if (this.present) { return this.held; }
+        return fallback;
+    }
+}
+
+// Parse -- the conversion surface, reporting failure as a Result.
+//
+// `khuStdConv` cannot return one: a namespace holds only native declarations,
+// and a native has no way to materialize a Khudra class. So the Result-shaped
+// parses are ordinary Khudra code over the sentinel-shaped ones, and the two
+// live side by side rather than one replacing the other:
+//
+//     Parse parse = Parse();
+//     Result<int32> r = parse.toInt32(line);
+//     if (r.ok()) { io.printLine(r.value()); }
+//     else { khuStdErr.errPrintLine(r.errorMessage()); }
+//
+// Every failure carries khuErrors.parse() and a message naming the text that
+// did not parse.
+public class Parse {
+    public func toInt8(string text) -> Result<int8> {
+        Result<int8> answer = Result<int8>();
+        if (khuStdConv.canParseInt8(text)) {
+            return answer.withValue(khuStdConv.parseInt8(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not int8: \"", text, "\""));
+    }
+
+    public func toInt16(string text) -> Result<int16> {
+        Result<int16> answer = Result<int16>();
+        if (khuStdConv.canParseInt16(text)) {
+            return answer.withValue(khuStdConv.parseInt16(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not int16: \"", text, "\""));
+    }
+
+    public func toInt32(string text) -> Result<int32> {
+        Result<int32> answer = Result<int32>();
+        if (khuStdConv.canParseInt32(text)) {
+            return answer.withValue(khuStdConv.parseInt32(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not int32: \"", text, "\""));
+    }
+
+    public func toInt64(string text) -> Result<int64> {
+        Result<int64> answer = Result<int64>();
+        if (khuStdConv.canParseInt64(text)) {
+            return answer.withValue(khuStdConv.parseInt64(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not int64: \"", text, "\""));
+    }
+
+    public func toUInt8(string text) -> Result<uint8> {
+        Result<uint8> answer = Result<uint8>();
+        if (khuStdConv.canParseUInt8(text)) {
+            return answer.withValue(khuStdConv.parseUInt8(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not uint8: \"", text, "\""));
+    }
+
+    public func toUInt16(string text) -> Result<uint16> {
+        Result<uint16> answer = Result<uint16>();
+        if (khuStdConv.canParseUInt16(text)) {
+            return answer.withValue(khuStdConv.parseUInt16(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not uint16: \"", text, "\""));
+    }
+
+    public func toUInt32(string text) -> Result<uint32> {
+        Result<uint32> answer = Result<uint32>();
+        if (khuStdConv.canParseUInt32(text)) {
+            return answer.withValue(khuStdConv.parseUInt32(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not uint32: \"", text, "\""));
+    }
+
+    public func toUInt64(string text) -> Result<uint64> {
+        Result<uint64> answer = Result<uint64>();
+        if (khuStdConv.canParseUInt64(text)) {
+            return answer.withValue(khuStdConv.parseUInt64(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not uint64: \"", text, "\""));
+    }
+
+    public func toFloat(string text) -> Result<float> {
+        Result<float> answer = Result<float>();
+        if (khuStdConv.canParseFloat(text)) {
+            return answer.withValue(khuStdConv.parseFloat(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not float: \"", text, "\""));
+    }
+
+    public func toDFloat(string text) -> Result<dfloat> {
+        Result<dfloat> answer = Result<dfloat>();
+        if (khuStdConv.canParseDFloat(text)) {
+            return answer.withValue(khuStdConv.parseDFloat(text));
+        }
+        return answer.withError(khuErrors.parse(),
+                                khuStdString.concat("not dfloat: \"", text, "\""));
+    }
+}

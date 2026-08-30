@@ -97,6 +97,19 @@ struct Value {
     }
 };
 
+// --- width normalization ---------------------------------------------------
+//
+// Overflow wraps (docs/spec.md, section 2), so every integer result is truncated back
+// to its declared width, and a 32-bit float rounds through `float` so its
+// precision is real rather than nominal. The interpreter, the shared natives
+// and `khu_native_abi.h`'s inline C all apply the same two rules; these are the
+// C++ side of that, shared so the interpreter and a native cannot diverge.
+
+std::uint64_t mask_of(std::uint32_t width);
+std::int64_t sign_extend(std::uint64_t bits, std::uint32_t width);
+Value normalize_int(TypeTag tag, std::uint64_t bits);
+Value normalize_float(TypeTag tag, double value);
+
 // Rendering for io.print and for runtime error messages.
 std::string to_display_string(const Value& value);
 

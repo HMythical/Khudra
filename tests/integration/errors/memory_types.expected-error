@@ -1,0 +1,7 @@
+cannot convert Node to *uint8 in argument 1 of call to 'khuStdMem.release'
+free expects a manually allocated object, found *uint8
+cannot convert string to int32 in argument 1 of call to 'khuStdMem.alloc'
+integer literal 300 does not fit in uint8
+cannot convert *int32 to *int64 in the initializer of 'wide'
+cannot convert Array<int32> to *uint8 in argument 1 of call to 'khuStdMem.zero'
+cannot convert Array<int32> to *uint8 in argument 1 of call to 'khuStdMem.addressOf'

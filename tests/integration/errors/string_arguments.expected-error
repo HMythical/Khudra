@@ -1,0 +1,5 @@
+cannot convert int32 to string in argument 1 of call to 'khuStdString.length'
+'+' expects numeric operands, found string and string
+cannot convert int64 to int32 in argument 2 of call to 'khuStdString.charAt'
+no declaration of 'khuStdString.concat' takes 1 argument
+namespace 'khuStdString' has no member 'split'

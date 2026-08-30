@@ -1,0 +1,42 @@
+// A program's own names come first.
+//
+// The standard library declares `List`, `Stack`, `Queue`, `Map`, `Result`,
+// `Option` and `Parse` as ordinary classes, which puts them in the same
+// namespace a program's classes live in. A program that already had a `List`
+// keeps it -- and the library's `Stack`, which is written over the library's
+// `List`, keeps working too.
+bring khu::stdlib;
+
+public class List {
+    public int32 length = 0;
+
+    public List(int32 n) { this.length = n; }
+    public func describe() -> string {
+        return khuStdString.concat("a program's List of ", khuStdConv.toString(this.length));
+    }
+}
+
+public class Shadowing {
+    func main() {
+        List mine = List(3);
+        io.printLine(mine.describe());
+        io.printLine(mine.length);
+
+        // Stack is the library's, and it is built on the library's List.
+        Stack<int32> stack = Stack<int32>();
+        stack.push(1);
+        stack.push(2);
+        io.printLine(stack.size());
+        io.printLine(stack.pop());
+
+        // So is Queue, and so is Map.
+        Queue<int32> queue = Queue<int32>();
+        queue.enqueue(9);
+        io.printLine(queue.dequeue());
+
+        Map<int32, string> map = Map<int32, string>();
+        map.put(1, "one");
+        io.printLine(map.get(1));
+        io.printLine(map.keys().size());
+    }
+}

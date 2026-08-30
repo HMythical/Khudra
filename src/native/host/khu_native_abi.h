@@ -153,6 +153,24 @@ int khu_rt_call_native(KhuFrame* frame, uint16_t native_id, uint8_t argc, const 
                        KhuValue* out, int expects_result);
 /* Contents comparison for strings, pointer identity otherwise -- the refeq
  * rule needs to look inside a std::string, so it cannot be inline C. */
+/* Arrays. The element type is erased at run time -- every element is a tagged
+ * KhuValue -- so only array_new carries one, and only to decide what a fresh
+ * array is filled with: 0 for a number, false for a bool, null for a reference.
+ * array_new is a safepoint (it allocates); the other three can trap on a null
+ * array or an index out of range, so all four publish `ip` and `height`. */
+int khu_rt_array_new(KhuFrame* frame, uint8_t element, const KhuValue* length, KhuValue* out);
+int khu_rt_array_len(KhuFrame* frame, const KhuValue* array, KhuValue* out);
+int khu_rt_array_get(KhuFrame* frame, const KhuValue* array, const KhuValue* index,
+                     KhuValue* out);
+int khu_rt_array_set(KhuFrame* frame, const KhuValue* array, const KhuValue* index,
+                     const KhuValue* value);
+/* Raw pointers. `element` is a type tag: a `*T` carries no tag of its own, so
+ * what is at an address is whatever the pointer's type said would be. Nothing
+ * bounds-checks these -- that is what raw means -- but a null pointer traps. */
+int khu_rt_ptr_get(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                   uint8_t element, KhuValue* out);
+int khu_rt_ptr_set(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                   uint8_t element, const KhuValue* value);
 int khu_rt_ref_same(const KhuValue* left, const KhuValue* right);
 int khu_rt_trap(KhuFrame* frame, const char* message);
 

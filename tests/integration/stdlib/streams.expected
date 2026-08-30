@@ -1,0 +1,10 @@
+out: 1 true
+written verbatim
+<Point>
+<array of 4>
+42
+text
+null
+<array of 4>
+<array of 4>
+stdout second line

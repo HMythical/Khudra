@@ -1,0 +1,18 @@
+// Manual object use-after-free: a freed object's chunk stays in its class
+// arena, so a stale alias still points at readable memory. The runtime must
+// trap rather than let the field read silently succeed.
+bring khu::stdlib;
+
+public class Node {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();
+    public int32 v = 42;
+}
+
+public class UseAfterFree {
+    func main() {
+        Node n = Node();
+        Node alias = n;   // another reference to the same object
+        free(n);
+        io.printLine(alias.v);  // reading through the released object
+    }
+}

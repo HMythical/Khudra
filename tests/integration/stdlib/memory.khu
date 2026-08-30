@@ -1,0 +1,83 @@
+// khuStdMem: manual buffers, checked where a length is known and raw where it
+// is not.
+bring khu::stdlib;
+
+public class Memory {
+    func main() {
+        // Nothing is live before the program allocates anything of its own.
+        io.printLine(khuStdMem.liveBlocks());
+
+        *byte buffer = khuStdMem.alloc(16);
+        io.printLine(khuStdMem.isNull(buffer));
+        io.printLine(khuStdMem.sizeOf(buffer));
+        io.printLine(khuStdMem.liveBlocks());
+        // A fresh buffer is zeroed.
+        io.printLine(buffer[0]);
+        io.printLine(buffer[15]);
+
+        // Indexing writes at the element's width. A *byte steps one byte.
+        buffer[0] = 75;
+        buffer[1] = 104;
+        io.printLine(buffer[0]);
+        io.printLine(khuStdConv.toChar(buffer[0]));
+        io.printLine(khuStdConv.toChar(buffer[1]));
+
+        // fill, zero and compare all check their range against the block.
+        khuStdMem.fill(buffer, 7, 4);
+        io.printLine(buffer[0]);
+        io.printLine(buffer[3]);
+        io.printLine(buffer[4]);
+        khuStdMem.zero(buffer, 4);
+        io.printLine(buffer[0]);
+
+        *byte other = khuStdMem.alloc(16);
+        khuStdMem.fill(other, 1, 16);
+        io.printLine(khuStdMem.compare(buffer, other, 16));
+        io.printLine(khuStdMem.compare(other, buffer, 16));
+        khuStdMem.copy(buffer, other, 16);
+        io.printLine(khuStdMem.compare(buffer, other, 16));
+        io.printLine(buffer[9]);
+
+        // move allows the overlap copy refuses.
+        khuStdMem.move(buffer, buffer, 16);
+        io.printLine(buffer[9]);
+
+        // Two buffers are two addresses.
+        io.printLine(khuStdMem.refEquals(buffer, other));
+        io.printLine(khuStdMem.refEquals(buffer, buffer));
+
+        // realloc keeps what fits.
+        buffer = khuStdMem.realloc(buffer, 32);
+        io.printLine(khuStdMem.sizeOf(buffer));
+        io.printLine(buffer[9]);
+        io.printLine(buffer[31]);
+
+        // A wider element type steps further.
+        *int32 words = khuStdMem.alloc(16);
+        words[0] = 1000000;
+        words[3] = -1;
+        io.printLine(words[0]);
+        io.printLine(words[1]);
+        io.printLine(words[3]);
+
+        // sizeOf over an array is what the object costs, not what it holds.
+        Array<int32> counts = khuStdCollection.arrayCreate(int32, 4);
+        io.printLine(khuStdCollection.arraySize(counts));
+        io.printLine(khuStdMem.sizeOf(counts) > 0);
+
+        // A null pointer names nothing, and asking its size says so.
+        *byte nothing = null;
+        io.printLine(khuStdMem.isNull(nothing));
+        io.printLine(khuStdMem.sizeOf(nothing));
+
+        khuStdMem.release(other);
+        khuStdMem.release(buffer);
+        khuStdMem.release(words);
+        // Releasing null is a no-op, so this is not an error.
+        khuStdMem.release(nothing);
+
+        // Everything the program allocated has gone back.
+        io.printLine(khuStdMem.liveBlocks());
+        io.printLine(khuStdMem.liveBytes());
+    }
+}

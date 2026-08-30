@@ -1,0 +1,409 @@
+// The containers, written in Khudra over Array<T>.
+//
+// `Array<T>` is fixed-length: it is storage, not a container. Everything with a
+// growth policy is here, in the language, over that storage -- which is the
+// point of having made arrays typed at all.
+//
+// ## Iterating
+//
+// Khudra has no `for`-over-a-collection and no closures (docs/roadmap.md), so
+// iteration is an index loop:
+//
+//     int32 i = 0;
+//     while (i < items.size()) {
+//         io.printLine(items.get(i));
+//         i = khuStdMath.add(i, 1);
+//     }
+//
+// `Map` has no index, so it answers `keys()` with a `List<K>` to walk instead.
+//
+// ## Reading something that is not there
+//
+// Every one of these **traps** rather than returning a default: `get` past the
+// end of a `List`, `pop` on an empty `Stack`, `get` of a key a `Map` does not
+// hold. That is not a stylistic choice. Generics are erased, so a `T` that was
+// never written holds `null` whatever `T` is, and handing that back as an
+// `int32` would be a lie the checker had already accepted. Where a default is
+// wanted, the caller supplies it: `getOrElse`, `peekOrElse`.
+//
+// ## Memory
+//
+// Every container is garbage collected, and so is the array behind it. A manual
+// object *stored in* one is pinned while the container holds it, exactly as a
+// field pins one (docs/memory-model.md).
+
+// A growable sequence.
+public class List<T> {
+    private Array<T> items;
+    private int32 count = 0;
+
+    public List() {
+        this.items = khuStdCollection.arrayCreate(T, 8);
+    }
+
+    public func size() -> int32 { return this.count; }
+    public func isEmpty() -> bool { return this.count == 0; }
+    public func capacity() -> int32 { return khuStdCollection.arraySize(this.items); }
+
+    // Appends `value`, growing the backing array when it is full.
+    public func add(T value) {
+        this.reserve(khuStdMath.add(this.count, 1));
+        this.items[this.count] = value;
+        this.count = khuStdMath.add(this.count, 1);
+    }
+
+    // The element at `index`. **Traps** when `index` is outside [0, size).
+    public func get(int32 index) -> T {
+        this.checkIndex(index, "List.get");
+        return this.items[index];
+    }
+
+    // The element at `index`, or `fallback` when `index` is outside it.
+    public func getOrElse(int32 index, T fallback) -> T {
+        if (index < 0) { return fallback; }
+        if (index >= this.count) { return fallback; }
+        return this.items[index];
+    }
+
+    // Replaces the element at `index`. **Traps** when `index` is outside it.
+    public func set(int32 index, T value) {
+        this.checkIndex(index, "List.set");
+        this.items[index] = value;
+    }
+
+    // The index of the first element equal to `value`, or -1.
+    public func indexOf(T value) -> int32 {
+        int32 i = 0;
+        while (i < this.count) {
+            if (khuStdCollection.sameValue(this.items[i], value)) { return i; }
+            i = khuStdMath.add(i, 1);
+        }
+        return -1;
+    }
+
+    public func contains(T value) -> bool { return this.indexOf(value) >= 0; }
+
+    // Removes and returns the element at `index`, shifting the rest down.
+    // **Traps** when `index` is outside [0, size).
+    public func removeAt(int32 index) -> T {
+        this.checkIndex(index, "List.removeAt");
+        T removed = this.items[index];
+        int32 i = index;
+        int32 last = khuStdMath.subtract(this.count, 1);
+        while (i < last) {
+            this.items[i] = this.items[khuStdMath.add(i, 1)];
+            i = khuStdMath.add(i, 1);
+        }
+        this.count = last;
+        // Drop the reference the tail slot still holds, so the collector is not
+        // kept from something the list no longer contains.
+        this.items[this.count] = this.emptySlot();
+        return removed;
+    }
+
+    // Removes the first element equal to `value`. True when one was found.
+    public func remove(T value) -> bool {
+        int32 at = this.indexOf(value);
+        if (at < 0) { return false; }
+        this.removeAt(at);
+        return true;
+    }
+
+    public func clear() {
+        this.items = khuStdCollection.arrayCreate(T, 8);
+        this.count = 0;
+    }
+
+    // Ensures room for `wanted` elements, doubling until there is.
+    private method reserve(int32 wanted) {
+        int32 room = khuStdCollection.arraySize(this.items);
+        if (wanted <= room) { return; }
+        int32 grown = room;
+        if (grown < 1) { grown = 1; }
+        while (grown < wanted) { grown = khuStdMath.multiply(grown, 2); }
+        Array<T> fresh = khuStdCollection.arrayCreate(T, grown);
+        int32 i = 0;
+        while (i < this.count) {
+            fresh[i] = this.items[i];
+            i = khuStdMath.add(i, 1);
+        }
+        this.items = fresh;
+    }
+
+    private method checkIndex(int32 index, string what) {
+        if (index < 0) {
+            khuErrors.fail(khuStdString.concat(what, ": index ",
+                                               khuStdConv.toString(index),
+                                               " is out of range for a size of ",
+                                               khuStdConv.toString(this.count)));
+        }
+        if (index >= this.count) {
+            khuErrors.fail(khuStdString.concat(what, ": index ",
+                                               khuStdConv.toString(index),
+                                               " is out of range for a size of ",
+                                               khuStdConv.toString(this.count)));
+        }
+    }
+
+    // The value a vacated slot goes back to. A fresh array holds it, so reading
+    // one out is how the class names it without knowing what T is.
+    private method emptySlot() -> T {
+        Array<T> blank = khuStdCollection.arrayCreate(T, 1);
+        return blank[0];
+    }
+}
+
+// Last in, first out.
+public class Stack<T> {
+    private List<T> items;
+
+    public Stack() { this.items = List<T>(); }
+
+    public func size() -> int32 { return this.items.size(); }
+    public func isEmpty() -> bool { return this.items.isEmpty(); }
+    public func push(T value) { this.items.add(value); }
+
+    // Removes and returns the top. **Traps** when the stack is empty.
+    public func pop() -> T {
+        if (this.items.isEmpty()) { khuErrors.fail("Stack.pop: the stack is empty"); }
+        return this.items.removeAt(khuStdMath.subtract(this.items.size(), 1));
+    }
+
+    // The top, without removing it. **Traps** when the stack is empty.
+    public func peek() -> T {
+        if (this.items.isEmpty()) { khuErrors.fail("Stack.peek: the stack is empty"); }
+        return this.items.get(khuStdMath.subtract(this.items.size(), 1));
+    }
+
+    public func peekOrElse(T fallback) -> T {
+        if (this.items.isEmpty()) { return fallback; }
+        return this.items.get(khuStdMath.subtract(this.items.size(), 1));
+    }
+
+    public func contains(T value) -> bool { return this.items.contains(value); }
+    public func clear() { this.items.clear(); }
+}
+
+// First in, first out.
+//
+// A circular buffer rather than a List, so dequeuing is not a shift of
+// everything behind it.
+public class Queue<T> {
+    private Array<T> items;
+    private int32 head = 0;
+    private int32 count = 0;
+
+    public Queue() { this.items = khuStdCollection.arrayCreate(T, 8); }
+
+    public func size() -> int32 { return this.count; }
+    public func isEmpty() -> bool { return this.count == 0; }
+
+    public func enqueue(T value) {
+        this.reserve(khuStdMath.add(this.count, 1));
+        int32 room = khuStdCollection.arraySize(this.items);
+        int32 at = khuStdMath.remainder(khuStdMath.add(this.head, this.count), room);
+        this.items[at] = value;
+        this.count = khuStdMath.add(this.count, 1);
+    }
+
+    // Removes and returns the oldest element. **Traps** when the queue is empty.
+    public func dequeue() -> T {
+        if (this.count == 0) { khuErrors.fail("Queue.dequeue: the queue is empty"); }
+        T removed = this.items[this.head];
+        // Clear the slot so the collector is not kept from what left the queue.
+        this.items[this.head] = this.emptySlot();
+        int32 room = khuStdCollection.arraySize(this.items);
+        this.head = khuStdMath.remainder(khuStdMath.add(this.head, 1), room);
+        this.count = khuStdMath.subtract(this.count, 1);
+        return removed;
+    }
+
+    // The oldest element, without removing it. **Traps** when empty.
+    public func peek() -> T {
+        if (this.count == 0) { khuErrors.fail("Queue.peek: the queue is empty"); }
+        return this.items[this.head];
+    }
+
+    public func peekOrElse(T fallback) -> T {
+        if (this.count == 0) { return fallback; }
+        return this.items[this.head];
+    }
+
+    public func clear() {
+        this.items = khuStdCollection.arrayCreate(T, 8);
+        this.head = 0;
+        this.count = 0;
+    }
+
+    private method reserve(int32 wanted) {
+        int32 room = khuStdCollection.arraySize(this.items);
+        if (wanted <= room) { return; }
+        int32 grown = room;
+        if (grown < 1) { grown = 1; }
+        while (grown < wanted) { grown = khuStdMath.multiply(grown, 2); }
+        // Growing straightens the buffer out: the copy is in order, so the new
+        // head is 0.
+        Array<T> fresh = khuStdCollection.arrayCreate(T, grown);
+        int32 i = 0;
+        while (i < this.count) {
+            fresh[i] = this.items[khuStdMath.remainder(khuStdMath.add(this.head, i), room)];
+            i = khuStdMath.add(i, 1);
+        }
+        this.items = fresh;
+        this.head = 0;
+    }
+
+    private method emptySlot() -> T {
+        Array<T> blank = khuStdCollection.arrayCreate(T, 1);
+        return blank[0];
+    }
+}
+
+// A key-value map: open addressing with linear probing.
+//
+// Buckets are `khuStdCollection.hash(key)` modulo the capacity, and a collision
+// walks forward. A removed bucket leaves a tombstone rather than a hole, so a
+// probe that ran past it still finds what is behind it. The table grows and
+// rehashes at 70% occupancy, counting tombstones -- they cost probes too.
+//
+// Because `hash` answers 0 for every reference, a `Map` keyed on objects is a
+// linear scan. Keyed on numbers, bools or strings it is a hash map.
+public class Map<K, V> {
+    // 0 = never used, 1 = holds an entry, 2 = held one and does not now.
+    private Array<int32> state;
+    private Array<K> keys;
+    private Array<V> values;
+    private int32 count = 0;
+    private int32 occupied = 0;
+
+    public Map() { this.reset(8); }
+
+    public func size() -> int32 { return this.count; }
+    public func isEmpty() -> bool { return this.count == 0; }
+
+    // Stores `value` under `key`, replacing what was there.
+    public func put(K key, V value) {
+        // Grow before inserting, so a probe always ends at a free bucket.
+        int32 room = khuStdCollection.arraySize(this.state);
+        if (khuStdMath.multiply(khuStdMath.add(this.occupied, 1), 10) >
+            khuStdMath.multiply(room, 7)) {
+            this.grow();
+            room = khuStdCollection.arraySize(this.state);
+        }
+
+        int32 at = this.probe(key);
+        if (this.state[at] == 1) {
+            this.values[at] = value;
+            return;
+        }
+        // A tombstone is reused, so it stops costing a probe.
+        if (this.state[at] == 0) { this.occupied = khuStdMath.add(this.occupied, 1); }
+        this.state[at] = 1;
+        this.keys[at] = key;
+        this.values[at] = value;
+        this.count = khuStdMath.add(this.count, 1);
+    }
+
+    public func containsKey(K key) -> bool { return this.state[this.probe(key)] == 1; }
+
+    // The value under `key`. **Traps** when the map does not hold it.
+    public func get(K key) -> V {
+        int32 at = this.probe(key);
+        if (this.state[at] != 1) { khuErrors.fail("Map.get: no such key"); }
+        return this.values[at];
+    }
+
+    // The value under `key`, or `fallback` when there is none.
+    public func getOrElse(K key, V fallback) -> V {
+        int32 at = this.probe(key);
+        if (this.state[at] != 1) { return fallback; }
+        return this.values[at];
+    }
+
+    // Removes `key`. True when it was there.
+    public func remove(K key) -> bool {
+        int32 at = this.probe(key);
+        if (this.state[at] != 1) { return false; }
+        // A tombstone, not a hole: a probe that ran past this bucket has to
+        // keep running past it to find what is behind it.
+        this.state[at] = 2;
+        this.keys[at] = this.emptyKey();
+        this.values[at] = this.emptyValue();
+        this.count = khuStdMath.subtract(this.count, 1);
+        return true;
+    }
+
+    public func clear() { this.reset(8); }
+
+    // Every key the map holds, in bucket order. That order is arbitrary but
+    // deterministic: `hash` gives the same answer on every run and under every
+    // backend, so the same insertions lay out the same table.
+    public func keys() -> List<K> {
+        List<K> found = List<K>();
+        int32 i = 0;
+        int32 room = khuStdCollection.arraySize(this.state);
+        while (i < room) {
+            if (this.state[i] == 1) { found.add(this.keys[i]); }
+            i = khuStdMath.add(i, 1);
+        }
+        return found;
+    }
+
+    // The bucket `key` belongs in: the one holding it, or the first free one
+    // the probe reached. Always terminates, because the table is grown before
+    // it can fill.
+    private method probe(K key) -> int32 {
+        int32 room = khuStdCollection.arraySize(this.state);
+        int32 at = khuStdMath.remainder(khuStdCollection.hash(key), room);
+        int32 firstTombstone = -1;
+        int32 stepped = 0;
+        while (stepped < room) {
+            if (this.state[at] == 0) {
+                if (firstTombstone >= 0) { return firstTombstone; }
+                return at;
+            }
+            if (this.state[at] == 1) {
+                if (khuStdCollection.sameValue(this.keys[at], key)) { return at; }
+            }
+            if (this.state[at] == 2) {
+                if (firstTombstone < 0) { firstTombstone = at; }
+            }
+            at = khuStdMath.remainder(khuStdMath.add(at, 1), room);
+            stepped = khuStdMath.add(stepped, 1);
+        }
+        if (firstTombstone >= 0) { return firstTombstone; }
+        return at;
+    }
+
+    private method grow() {
+        Array<int32> oldState = this.state;
+        Array<K> oldKeys = this.keys;
+        Array<V> oldValues = this.values;
+        int32 room = khuStdCollection.arraySize(oldState);
+        this.reset(khuStdMath.multiply(room, 2));
+
+        int32 i = 0;
+        while (i < room) {
+            if (oldState[i] == 1) { this.put(oldKeys[i], oldValues[i]); }
+            i = khuStdMath.add(i, 1);
+        }
+    }
+
+    private method reset(int32 room) {
+        this.state = khuStdCollection.arrayCreate(int32, room);
+        this.keys = khuStdCollection.arrayCreate(K, room);
+        this.values = khuStdCollection.arrayCreate(V, room);
+        this.count = 0;
+        this.occupied = 0;
+    }
+
+    private method emptyKey() -> K {
+        Array<K> blank = khuStdCollection.arrayCreate(K, 1);
+        return blank[0];
+    }
+
+    private method emptyValue() -> V {
+        Array<V> blank = khuStdCollection.arrayCreate(V, 1);
+        return blank[0];
+    }
+}

@@ -1,0 +1,24 @@
+// khuStdConv converts representations, not widths: every parse names the width
+// it produces, and nothing about it is implicit.
+bring khu::stdlib;
+
+public class ConvTypes {
+    func go() {
+        // There is no parseInt: the width is part of the name, because every
+        // one of them takes a string and overload resolution has nothing to
+        // choose on.
+        int32 value = khuStdConv.parseInt("12");
+
+        // The width a parse produces is the width it produces.
+        int64 wide = khuStdConv.parseInt32("12");
+
+        // The byte utilities are byte utilities.
+        int32 letter = 75;
+        io.printLine(khuStdConv.isLetter(letter));
+
+        // toString takes a value, not a type.
+        io.printLine(khuStdConv.toString(int32));
+    }
+
+    func main() { }
+}

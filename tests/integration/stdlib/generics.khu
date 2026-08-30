@@ -1,0 +1,93 @@
+// Generic classes: type parameters, written out at every use, erased at run time.
+bring khu::stdlib;
+
+public class Box<T> {
+    private T held;
+    private bool full = false;
+
+    public func put(T value) {
+        this.held = value;
+        this.full = true;
+    }
+    public func get() -> T { return this.held; }
+    public func isFull() -> bool { return this.full; }
+}
+
+public class Pair<A, B> {
+    private A left;
+    private B right;
+
+    public func set(A a, B b) {
+        this.left = a;
+        this.right = b;
+    }
+    public func first() -> A { return this.left; }
+    public func second() -> B { return this.right; }
+}
+
+// A type parameter reaches an Array<T> too, and the array is created with the
+// parameter as its element type.
+public class Buffer<T> {
+    private Array<T> slots;
+    private int32 used = 0;
+
+    public Buffer(int32 capacity) {
+        this.slots = khuStdCollection.arrayCreate(T, capacity);
+    }
+
+    public func add(T value) {
+        this.slots[this.used] = value;
+        this.used = khuStdMath.add(this.used, 1);
+    }
+    public func get(int32 index) -> T { return this.slots[index]; }
+    public func size() -> int32 { return this.used; }
+    public func capacity() -> int32 { return khuStdCollection.arraySize(this.slots); }
+}
+
+public class Generics {
+    func main() {
+        // A fresh Box holds nothing: an erased slot starts as null.
+        Box<int32> numbers = Box<int32>();
+        io.printLine(numbers.isFull());
+        numbers.put(42);
+        io.printLine(numbers.get());
+        io.printLine(numbers.isFull());
+
+        // The same class, a different instantiation, a different element type.
+        Box<string> words = Box<string>();
+        words.put("hello");
+        io.printLine(words.get());
+        io.printLine(khuStdString.length(words.get()));
+
+        // Two parameters, in order.
+        Pair<int32, string> pair = Pair<int32, string>();
+        pair.set(7, "seven");
+        io.printLine(pair.first());
+        io.printLine(pair.second());
+
+        // A parameter used as an array's element type.
+        Buffer<int32> buffer = Buffer<int32>(4);
+        io.printLine(buffer.capacity());
+        io.printLine(buffer.size());
+        buffer.add(10);
+        buffer.add(20);
+        io.printLine(buffer.size());
+        io.printLine(buffer.get(0));
+        io.printLine(khuStdMath.add(buffer.get(0), buffer.get(1)));
+
+        Buffer<string> text = Buffer<string>(2);
+        text.add("a");
+        text.add("b");
+        io.printLine(khuStdString.concat(text.get(0), text.get(1)));
+
+        // A generic class can hold a generic class.
+        Box<Box<int32>> nested = Box<Box<int32>>();
+        nested.put(numbers);
+        io.printLine(nested.get().get());
+
+        // And an array of one.
+        Array<Box<int32>> boxes = khuStdCollection.arrayCreate(Box<int32>, 2);
+        boxes[0] = numbers;
+        io.printLine(boxes[0].get());
+    }
+}

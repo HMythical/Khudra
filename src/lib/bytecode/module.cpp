@@ -272,6 +272,7 @@ std::string serialize(const Module& module) {
         put_u16(out, entry.frame_size);
         put_u8(out, static_cast<std::uint8_t>(entry.return_type));
         put_u32(out, entry.native_id);
+        put_u32(out, entry.source_file);
 
         put_u32(out, static_cast<std::uint32_t>(entry.code.size()));
         for (std::uint8_t byte : entry.code) put_u8(out, byte);
@@ -368,6 +369,7 @@ bool deserialize(std::string_view bytes, Module& out, std::string& error) {
         entry.frame_size = reader.u16();
         entry.return_type = static_cast<TypeTag>(reader.u8());
         entry.native_id = reader.u32();
+        entry.source_file = reader.u32();
 
         std::uint32_t code_length = reader.u32();
         for (std::uint32_t c = 0; c < code_length && reader.ok(); ++c) entry.code.push(reader.u8());

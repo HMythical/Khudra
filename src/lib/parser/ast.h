@@ -77,6 +77,10 @@ struct TypeNode {
     // `int32`. Canonicalization happens in Sema, not here.
     std::string_view name;
     TypeNode* pointee = nullptr;
+    // Type arguments: the `int32` of `Array<int32>`, the `K, V` of `Map<K, V>`.
+    // Empty for a bare `Array`, which stays legal and stays unindexable -- the
+    // form that predates generics -- and for a class written without them.
+    util::Array<TypeNode*> arguments;
 };
 
 // ---------------------------------------------------------------------------
@@ -434,6 +438,10 @@ struct ClassDecl : Decl {
     bool explicit_visibility = false;
     std::string_view name;
     SourceLocation name_loc;
+    // `class List<T>`: the names bound inside the body. Empty for an ordinary
+    // class.
+    util::Array<std::string_view> type_params;
+    util::Array<SourceLocation> type_param_locs;
     std::string_view base_name;  // empty when there is no `extends`
     SourceLocation base_loc;
     // `namespace Name { ... }`: a container of static members that is never
@@ -447,6 +455,10 @@ struct ClassDecl : Decl {
 
 struct CompilationUnit {
     std::uint32_t file_id = diag::kInvalidFileId;
+    // True for the embedded standard library. Its class names are resolved
+    // ahead of the program's inside its own code, and behind them everywhere
+    // else, so a program that declares its own `List` gets its own.
+    bool is_stdlib = false;
     util::Array<ImportDecl*> imports;
     util::Array<ClassDecl*> classes;
 };

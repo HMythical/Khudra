@@ -23,6 +23,17 @@ void Collector::trace_worklist() {
         Object* object = worklist_.back();
         worklist_.pop();
 
+        // An array has no reference map -- its element type is erased -- so it
+        // is traced by tag instead. That is still precise: a Value's tag says
+        // exactly whether it holds a reference, which is the same question the
+        // map answers for a field.
+        if (object->is_array()) {
+            Value* elements = object->slots();
+            std::uint32_t length = object->array_length();
+            for (std::uint32_t i = 0; i < length; ++i) mark_value(elements[i]);
+            continue;
+        }
+
         auto* type = static_cast<RuntimeClass*>(object->header.vtable);
         if (!type) continue;
 
@@ -31,7 +42,14 @@ void Collector::trace_worklist() {
             const bytecode::FieldEntry* field = type->field(i);
             // Precise tracing: only managed references are followed. A manual
             // reference is pinned instead, and a raw slot is never a pointer.
-            if (!field || field->ref_kind != bytecode::kRefManaged) continue;
+            // A managed slot is followed; a dynamic one is followed only when
+            // the value in it says it holds a reference, which mark_value
+            // already checks.
+            if (!field) continue;
+            if (field->ref_kind != bytecode::kRefManaged &&
+                field->ref_kind != bytecode::kRefDynamic) {
+                continue;
+            }
             mark_value(slots[i]);
         }
     }
@@ -49,7 +67,14 @@ void Collector::mark_from_roots() {
         Value* slots = manual->slots();
         for (std::uint32_t i = 0; i < type->slot_count; ++i) {
             const bytecode::FieldEntry* field = type->field(i);
-            if (!field || field->ref_kind != bytecode::kRefManaged) continue;
+            // A managed slot is followed; a dynamic one is followed only when
+            // the value in it says it holds a reference, which mark_value
+            // already checks.
+            if (!field) continue;
+            if (field->ref_kind != bytecode::kRefManaged &&
+                field->ref_kind != bytecode::kRefDynamic) {
+                continue;
+            }
             mark_value(slots[i]);
         }
     }
@@ -57,18 +82,39 @@ void Collector::mark_from_roots() {
     trace_worklist();
 }
 
+namespace {
+
+// Drops one pin an object was holding on a manual object through `slot`.
+void release_pin(Value& slot) {
+    if (slot.tag != TypeTag::Ref || !slot.as_ref) return;
+    if (!slot.as_ref->is_manual()) return;
+    if (slot.as_ref->header.pin_count > 0) --slot.as_ref->header.pin_count;
+}
+
+}  // namespace
+
 void Collector::release_pins(Object* object) {
+    // Same story as tracing: an array's pins are found by tag, a class
+    // instance's by its reference map.
+    if (object->is_array()) {
+        Value* elements = object->slots();
+        std::uint32_t length = object->array_length();
+        for (std::uint32_t i = 0; i < length; ++i) release_pin(elements[i]);
+        return;
+    }
+
     auto* type = static_cast<RuntimeClass*>(object->header.vtable);
     if (!type) return;
 
     Value* slots = object->slots();
     for (std::uint32_t i = 0; i < type->slot_count; ++i) {
         const bytecode::FieldEntry* field = type->field(i);
-        if (!field || field->ref_kind != bytecode::kRefManual) continue;
-        Value& slot = slots[i];
-        if (slot.tag != TypeTag::Ref || !slot.as_ref) continue;
-        if (!slot.as_ref->is_manual()) continue;
-        if (slot.as_ref->header.pin_count > 0) --slot.as_ref->header.pin_count;
+        if (!field) continue;
+        if (field->ref_kind != bytecode::kRefManual &&
+            field->ref_kind != bytecode::kRefDynamic) {
+            continue;
+        }
+        release_pin(slots[i]);
     }
 }
 

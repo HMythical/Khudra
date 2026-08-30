@@ -31,6 +31,10 @@ enum class TypeKind : std::uint8_t {
     Class,
     Memory,  // MemoryAllocationTypeObject
     Null,    // the type of the `null` literal: "not instantiated yet"
+    // The `T` of `class List<T>`, inside that class's own body. It is a real
+    // type to the checker and nothing at all at run time: generics are erased,
+    // so a slot declared `T` holds whatever tagged value was put there.
+    TypeParam,
 };
 
 // How the collector must treat a slot of this type (docs/memory-model.md).
@@ -38,6 +42,9 @@ enum class RefKind : std::uint8_t {
     Raw,         // scalars and raw pointers -- never traced
     ManagedRef,  // a GC object -- traced
     ManualRef,   // a manual object -- pinned, never traced
+    // An erased slot (the `T` of a generic class). What is in it is only known
+    // at run time, so it is traced and pinned by the value's own tag.
+    Dynamic,
 };
 
 const char* ref_kind_name(RefKind kind);
@@ -47,7 +54,15 @@ public:
     TypeKind kind = TypeKind::Error;
     std::uint32_t width = 0;              // bits, for Int/UInt/Float
     const Type* pointee = nullptr;        // Pointer
-    const ClassSymbol* class_symbol = nullptr;  // Class
+    // Array. Null for a bare `Array`, which is the untyped form that predates
+    // generics: it can be held, passed and compared, but not indexed.
+    const Type* element = nullptr;
+    // Class: the symbol, plus the arguments it was written with -- the
+    // `int32, string` of `Map<int32, string>`. Empty for a class with no type
+    // parameters.
+    // TypeParam: the class that declares it, with `width` as its index.
+    const ClassSymbol* class_symbol = nullptr;
+    util::Array<const Type*> arguments;
 
     bool is_error() const { return kind == TypeKind::Error; }
     bool is_void() const { return kind == TypeKind::Void; }
@@ -59,7 +74,11 @@ public:
     bool is_float() const { return kind == TypeKind::Float; }
     bool is_numeric() const { return is_integer() || is_float(); }
     bool is_class() const { return kind == TypeKind::Class; }
+    bool is_array() const { return kind == TypeKind::Array; }
+    // An `Array<T>` knows what it holds; a bare `Array` does not.
+    bool is_typed_array() const { return kind == TypeKind::Array && element != nullptr; }
     bool is_memory() const { return kind == TypeKind::Memory; }
+    bool is_type_param() const { return kind == TypeKind::TypeParam; }
 
     // Types that can hold `null` -- everything that is a reference at runtime.
     bool is_reference() const {
@@ -69,6 +88,11 @@ public:
             case TypeKind::Pointer:
             case TypeKind::Class:
             case TypeKind::Null:
+                return true;
+            case TypeKind::TypeParam:
+                // Erased: it may hold a number as easily as a reference, so it
+                // is a reference slot as far as storage is concerned and
+                // `null` fits it.
                 return true;
             default:
                 return false;
@@ -94,6 +118,7 @@ public:
     const Type* bool_type() const { return bool_; }
     const Type* null_type() const { return null_; }
     const Type* string_type() const { return string_; }
+    // The bare, untyped `Array`.
     const Type* array_type() const { return array_; }
     const Type* memory_type() const { return memory_; }
 
@@ -103,7 +128,13 @@ public:
 
     const Type* int32() const { return signed_int(32); }
     const Type* pointer_to(const Type* pointee);
+    // `Array<element>`. A null element gives the bare `Array` back.
+    const Type* array_of(const Type* element);
     const Type* class_type(const ClassSymbol* symbol);
+    // `Symbol<arguments...>`.
+    const Type* class_type(const ClassSymbol* symbol, const util::Array<const Type*>& arguments);
+    // The `index`th type parameter of `owner`.
+    const Type* type_param(const ClassSymbol* owner, std::uint32_t index);
 
     // Reference kind for a slot of `type`, used to build class reference maps.
     RefKind ref_kind_of(const Type* type) const;

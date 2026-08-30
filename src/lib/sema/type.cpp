@@ -9,6 +9,7 @@ const char* ref_kind_name(RefKind kind) {
         case RefKind::Raw: return "raw";
         case RefKind::ManagedRef: return "managed-ref";
         case RefKind::ManualRef: return "manual-ref";
+        case RefKind::Dynamic: return "dynamic-ref";
     }
     return "raw";
 }
@@ -20,6 +21,7 @@ std::uint32_t Type::slot_size() const {
         case TypeKind::UInt:
         case TypeKind::Float: return width / 8;
         case TypeKind::Memory: return 4;  // a strategy tag
+        case TypeKind::TypeParam: return sizeof(void*);  // erased: one tagged value
         case TypeKind::Void:
         case TypeKind::Error: return 0;
         default: return sizeof(void*);
@@ -35,9 +37,24 @@ std::string Type::display() const {
         case TypeKind::UInt: return "uint" + std::to_string(width);
         case TypeKind::Float: return width == 32 ? "float" : "dfloat";
         case TypeKind::String: return "string";
-        case TypeKind::Array: return "Array";
+        case TypeKind::Array: return element ? "Array<" + element->display() + ">" : "Array";
         case TypeKind::Pointer: return "*" + (pointee ? pointee->display() : std::string("void"));
-        case TypeKind::Class: return class_symbol ? std::string(class_symbol->name) : "<class>";
+        case TypeKind::Class: {
+            std::string text = class_symbol ? std::string(class_symbol->name) : "<class>";
+            if (arguments.empty()) return text;
+            text += "<";
+            for (std::size_t i = 0; i < arguments.size(); ++i) {
+                if (i != 0) text += ", ";
+                text += arguments[i] ? arguments[i]->display() : "<error>";
+            }
+            text += ">";
+            return text;
+        }
+        case TypeKind::TypeParam:
+            if (class_symbol && width < class_symbol->type_params.size()) {
+                return std::string(class_symbol->type_params[width]);
+            }
+            return "<type parameter>";
         case TypeKind::Memory: return "MemoryAllocationTypeObject";
         case TypeKind::Null: return "null";
     }
@@ -56,7 +73,13 @@ std::string key_for(const Type& type) {
     key += ':';
     key += std::to_string(reinterpret_cast<std::uintptr_t>(type.pointee));
     key += ':';
+    key += std::to_string(reinterpret_cast<std::uintptr_t>(type.element));
+    key += ':';
     key += std::to_string(reinterpret_cast<std::uintptr_t>(type.class_symbol));
+    for (const Type* argument : type.arguments) {
+        key += ':';
+        key += std::to_string(reinterpret_cast<std::uintptr_t>(argument));
+    }
     return key;
 }
 
@@ -160,10 +183,35 @@ const Type* TypeContext::pointer_to(const Type* pointee) {
     return intern(scratch);
 }
 
+const Type* TypeContext::array_of(const Type* element) {
+    if (!element) return array_;
+    Type scratch;
+    scratch.kind = TypeKind::Array;
+    scratch.element = element;
+    return intern(scratch);
+}
+
 const Type* TypeContext::class_type(const ClassSymbol* symbol) {
     Type scratch;
     scratch.kind = TypeKind::Class;
     scratch.class_symbol = symbol;
+    return intern(scratch);
+}
+
+const Type* TypeContext::class_type(const ClassSymbol* symbol,
+                                    const util::Array<const Type*>& arguments) {
+    Type scratch;
+    scratch.kind = TypeKind::Class;
+    scratch.class_symbol = symbol;
+    scratch.arguments = arguments;
+    return intern(scratch);
+}
+
+const Type* TypeContext::type_param(const ClassSymbol* owner, std::uint32_t index) {
+    Type scratch;
+    scratch.kind = TypeKind::TypeParam;
+    scratch.class_symbol = owner;
+    scratch.width = index;
     return intern(scratch);
 }
 
@@ -178,6 +226,11 @@ RefKind TypeContext::ref_kind_of(const Type* type) const {
             if (!type->class_symbol) return RefKind::ManagedRef;
             return type->class_symbol->strategy == Strategy::Manual ? RefKind::ManualRef
                                                                     : RefKind::ManagedRef;
+        case TypeKind::TypeParam:
+            // An erased slot's contents are only known at run time, so it is
+            // traced and pinned by the tag it is holding rather than by a
+            // static answer here (docs/memory-model.md, 3.1).
+            return RefKind::Dynamic;
         default:
             // Scalars, raw pointers and the strategy descriptor are never traced.
             return RefKind::Raw;

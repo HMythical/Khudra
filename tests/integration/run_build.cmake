@@ -1,7 +1,8 @@
 # Builds one program into a standalone native executable and runs it.
 #
 #   cmake -DKHUDRA=<path> -DSOURCE=<file.khu> -DEXPECTED=<file.expected>
-#         -DOUTPUT=<binary> -P run_build.cmake
+#         [-DEXPECTED_ERR=<file.expected-err>] -DOUTPUT=<binary>
+#         -P run_build.cmake
 #
 # This is the ahead-of-time proof: the artifact is a program in its own right,
 # so it is executed directly, with no toolchain in the picture, and has to match
@@ -48,4 +49,14 @@ if(NOT actual_output STREQUAL expected_output)
         "output of the built ${SOURCE} does not match ${EXPECTED}\n"
         "--- expected ---\n${expected_output}"
         "--- actual ---\n${actual_output}")
+endif()
+
+if(DEFINED EXPECTED_ERR AND EXISTS "${EXPECTED_ERR}")
+    file(READ "${EXPECTED_ERR}" expected_errors)
+    if(NOT actual_errors STREQUAL expected_errors)
+        message(FATAL_ERROR
+            "stderr of the built ${SOURCE} does not match ${EXPECTED_ERR}\n"
+            "--- expected ---\n${expected_errors}"
+            "--- actual ---\n${actual_errors}")
+    endif()
 endif()

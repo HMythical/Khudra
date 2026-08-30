@@ -18,7 +18,7 @@ namespace khu::bytecode {
 
 constexpr char kMagic[4] = {'K', 'H', 'U', 'B'};
 constexpr std::uint16_t kVersionMajor = 1;
-constexpr std::uint16_t kVersionMinor = 1;
+constexpr std::uint16_t kVersionMinor = 2;
 
 // One typed entry in the constant pool. Integer constants keep their width so
 // the VM never has to guess one.
@@ -42,6 +42,10 @@ enum RefKindByte : std::uint8_t {
     kRefRaw = 0,
     kRefManaged = 1,
     kRefManual = 2,
+    // An erased slot -- the `T` of a generic class. What is in it is only known
+    // at run time, so it is traced and pinned by the value's own tag, the way
+    // an array's elements are (docs/memory-model.md, 3.1).
+    kRefDynamic = 3,
 };
 
 struct FieldEntry {
@@ -97,6 +101,11 @@ struct MethodEntry {
     std::uint16_t frame_size = 0;  // parameters plus locals
     TypeTag return_type = TypeTag::Void;
     std::uint32_t native_id = 0;
+    // Constant-pool index of the file this method was written in. An image is
+    // built from more than one file -- the program plus the standard library --
+    // so a stack trace has to name the right one per frame rather than assuming
+    // the module's own path.
+    std::uint32_t source_file = 0;
     util::Array<std::uint8_t> code;
     util::Array<LineEntry> lines;
 

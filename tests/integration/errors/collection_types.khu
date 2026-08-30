@@ -1,0 +1,33 @@
+// The containers are checked, even though their element type is erased.
+bring khu::stdlib;
+
+public class CollectionTypes {
+    func go() {
+        List<int32> numbers = List<int32>();
+
+        // The element type is the element type.
+        numbers.add("text");
+        string first = numbers.get(0);
+
+        // One instantiation is not another.
+        List<string> words = numbers;
+
+        // A Map's two parameters are in order, and both are enforced.
+        Map<string, int32> ages = Map<string, int32>();
+        ages.put(1, "one");
+
+        // The containers are written with their arguments, like every generic
+        // class.
+        List plain = List<int32>();
+        Stack<int32, string> tooMany = Stack<int32, string>();
+
+        // The backing storage is private: a container is not its array.
+        io.printLine(khuStdCollection.arraySize(numbers));
+
+        // hash and sameValue need values, not types.
+        io.printLine(khuStdCollection.hash(int32));
+        io.printLine(khuStdCollection.sameValue(1));
+    }
+
+    func main() { }
+}

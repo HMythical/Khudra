@@ -1,0 +1,8 @@
+cannot convert string to int32 in an assignment
+cannot convert int32 to string in the initializer of 'first'
+cannot convert Array<int32> to Array<string> in the initializer of 'names'
+a bare 'Array' has no element type, so it cannot be indexed
+an index must be an integer, found dfloat
+the first argument of khuStdCollection.arrayCreate must be a type
+this expression cannot be assigned to
+type int32 cannot be indexed

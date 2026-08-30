@@ -1,0 +1,31 @@
+// The math surface is a matrix, not a set of generic signatures: an operation
+// exists for the widths it means something for, and for no others.
+bring khu::stdlib;
+
+public class Domains {
+    func go() {
+        // Transcendentals are floating point only.
+        int32 four = 4;
+        io.printLine(khuStdMath.sqrt(four));
+
+        // abs and signum are signed and floating point only: an unsigned value
+        // has no sign, and negating one wraps rather than negates.
+        uint16 count = 3;
+        io.printLine(khuStdMath.abs(count));
+        io.printLine(khuStdMath.signum(count));
+
+        // gcd and lcm are integer operations.
+        dfloat ratio = 1.5;
+        io.printLine(khuStdMath.gcd(ratio, ratio));
+
+        // Widths still do not mix, native or not.
+        int32 narrow = 1;
+        int64 wide = 2;
+        io.printLine(khuStdMath.min(narrow, wide));
+
+        // The constants take no arguments.
+        io.printLine(khuStdMath.pi(1.0));
+    }
+
+    func main() { }
+}

@@ -400,6 +400,28 @@ KHU_TEST(objects, honour_the_allocation_site_strategy) {
         "5\nreleased\n");
 }
 
+KHU_TEST(objects, trap_on_use_after_free) {
+    // Freeing a manual object leaves its chunk in the class arena, so a stale
+    // alias still points at readable memory. The runtime must trap rather than
+    // let the field read through the released object silently succeed.
+    RunResult result = run_source(
+        "public class Node {\n"
+        "    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();\n"
+        "    public int32 v = 42;\n"
+        "}\n"
+        "public class T {\n"
+        "    func main() {\n"
+        "        Node n = Node();\n"
+        "        Node alias = n;\n"
+        "        free(n);\n"
+        "        io.printLine(alias.v);\n"
+        "    }\n"
+        "}\n");
+    KHU_CHECK(result.compiled);
+    KHU_CHECK(!result.ran);
+    KHU_CHECK_CONTAINS(result.runtime_error, "use of an object after it was released");
+}
+
 KHU_TEST(objects, reject_freeing_a_collected_object_before_it_runs) {
     // A reference's class is known statically even through a parameter, so the
     // checker catches this and the program never reaches the VM. The VM keeps
@@ -474,7 +496,17 @@ KHU_TEST(codegen, emits_a_line_table_for_stack_traces) {
     KHU_CHECK(compiler.compile(file, module));
     if (compiler.diagnostics().has_errors()) return;
 
-    const khu::bytecode::MethodEntry& main = module.methods[0];
+    // Method 0 belongs to whichever class the standard library declared first,
+    // so `main` is found by name.
+    const khu::bytecode::MethodEntry* found = nullptr;
+    for (const khu::bytecode::MethodEntry& method : module.methods) {
+        if (module.string_at(method.name) == "main") found = &method;
+    }
+    if (!found) {
+        KHU_FAIL("the image has no 'main'");
+        return;
+    }
+    const khu::bytecode::MethodEntry& main = *found;
     KHU_CHECK(main.lines.size() >= 2);
     // Offsets increase, and each maps to a real line.
     for (std::size_t i = 1; i < main.lines.size(); ++i) {
@@ -498,11 +530,23 @@ KHU_TEST(codegen, records_class_layout_and_reference_maps_in_the_image) {
     khu::bytecode::Module module;
     KHU_CHECK(compiler.compile(file, module));
     if (!compiler.diagnostics().has_errors()) {
-        KHU_CHECK_EQ(module.classes.size(), static_cast<std::size_t>(2));
-        const khu::bytecode::ClassEntry& manual = module.classes[0];
+        // The image also carries the standard library's own classes, so the
+        // program's are found by name rather than by index.
+        const khu::bytecode::ClassEntry* manual_entry = nullptr;
+        const khu::bytecode::ClassEntry* holder_entry = nullptr;
+        for (const khu::bytecode::ClassEntry& entry : module.classes) {
+            std::string_view name = module.string_at(entry.name);
+            if (name == "Manual") manual_entry = &entry;
+            if (name == "Holder") holder_entry = &entry;
+        }
+        if (!manual_entry || !holder_entry) {
+            KHU_FAIL("the image does not carry both program classes");
+            return;
+        }
+        const khu::bytecode::ClassEntry& manual = *manual_entry;
         KHU_CHECK_EQ(manual.flags, static_cast<std::uint32_t>(khu::bytecode::kClassManual));
 
-        const khu::bytecode::ClassEntry& holder = module.classes[1];
+        const khu::bytecode::ClassEntry& holder = *holder_entry;
         KHU_CHECK_EQ(holder.flags, static_cast<std::uint32_t>(khu::bytecode::kClassGc));
         KHU_CHECK_EQ(holder.fields.size(), static_cast<std::size_t>(2));
         KHU_CHECK_EQ(holder.fields[0].ref_kind, static_cast<std::uint8_t>(khu::bytecode::kRefRaw));
@@ -536,6 +580,8 @@ KHU_TEST(codegen, emits_materialize_with_the_resolved_strategy) {
             listing = khu::bytecode::disassemble_method(module, method);
         }
     }
-    KHU_CHECK_CONTAINS(listing, "materialize     0, standard");
-    KHU_CHECK_CONTAINS(listing, "materialize     0, manual");
+    // The class id depends on how many classes the standard library brought
+    // with it, so the listing is checked for the annotated form.
+    KHU_CHECK_CONTAINS(listing, ", standard    ; Node");
+    KHU_CHECK_CONTAINS(listing, ", manual    ; Node");
 }

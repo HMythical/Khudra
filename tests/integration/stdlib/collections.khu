@@ -1,0 +1,160 @@
+// The containers, over Array<T>.
+bring khu::stdlib;
+
+public class Collections {
+    func main() {
+        // --- List ---------------------------------------------------------
+        List<int32> numbers = List<int32>();
+        io.printLine(numbers.isEmpty());
+        io.printLine(numbers.size());
+
+        int32 i = 0;
+        while (i < 10) {
+            numbers.add(khuStdMath.multiply(i, i));
+            i = khuStdMath.add(i, 1);
+        }
+        io.printLine(numbers.size());
+        io.printLine(numbers.isEmpty());
+        io.printLine(numbers.get(0));
+        io.printLine(numbers.get(9));
+        // Growth is invisible from outside, but the capacity moved.
+        io.printLine(numbers.capacity() >= numbers.size());
+
+        io.printLine(numbers.contains(49));
+        io.printLine(numbers.contains(50));
+        io.printLine(numbers.indexOf(49));
+        io.printLine(numbers.indexOf(50));
+
+        numbers.set(0, -1);
+        io.printLine(numbers.get(0));
+        io.printLine(numbers.getOrElse(99, -7));
+
+        io.printLine(numbers.removeAt(0));
+        io.printLine(numbers.size());
+        io.printLine(numbers.get(0));
+        io.printLine(numbers.remove(49));
+        io.printLine(numbers.remove(49));
+        io.printLine(numbers.size());
+
+        // The iteration idiom: an index loop over size() and get(i).
+        List<string> words = List<string>();
+        words.add("alpha");
+        words.add("beta");
+        words.add("gamma");
+        int32 w = 0;
+        while (w < words.size()) {
+            io.print(words.get(w));
+            io.print(" ");
+            w = khuStdMath.add(w, 1);
+        }
+        io.printLine("");
+
+        words.clear();
+        io.printLine(words.size());
+        io.printLine(words.isEmpty());
+
+        // --- Stack --------------------------------------------------------
+        Stack<int32> stack = Stack<int32>();
+        io.printLine(stack.isEmpty());
+        io.printLine(stack.peekOrElse(-1));
+        stack.push(1);
+        stack.push(2);
+        stack.push(3);
+        io.printLine(stack.size());
+        io.printLine(stack.peek());
+        io.printLine(stack.pop());
+        io.printLine(stack.pop());
+        io.printLine(stack.size());
+        io.printLine(stack.contains(1));
+        stack.clear();
+        io.printLine(stack.isEmpty());
+
+        // --- Queue --------------------------------------------------------
+        Queue<string> queue = Queue<string>();
+        io.printLine(queue.isEmpty());
+        io.printLine(queue.peekOrElse("empty"));
+        queue.enqueue("first");
+        queue.enqueue("second");
+        queue.enqueue("third");
+        io.printLine(queue.size());
+        io.printLine(queue.peek());
+        io.printLine(queue.dequeue());
+        io.printLine(queue.dequeue());
+        io.printLine(queue.size());
+        queue.enqueue("fourth");
+        io.printLine(queue.dequeue());
+        io.printLine(queue.dequeue());
+        io.printLine(queue.isEmpty());
+
+        // A queue that wraps and then grows keeps its order.
+        Queue<int32> ring = Queue<int32>();
+        int32 r = 0;
+        while (r < 20) {
+            ring.enqueue(r);
+            if (khuStdMath.remainder(r, 3) == 0) { ring.dequeue(); }
+            r = khuStdMath.add(r, 1);
+        }
+        io.printLine(ring.size());
+        io.printLine(ring.peek());
+
+        // --- Map ----------------------------------------------------------
+        Map<string, int32> ages = Map<string, int32>();
+        io.printLine(ages.isEmpty());
+        io.printLine(ages.containsKey("ada"));
+        io.printLine(ages.getOrElse("ada", -1));
+
+        ages.put("ada", 36);
+        ages.put("alan", 41);
+        ages.put("grace", 85);
+        io.printLine(ages.size());
+        io.printLine(ages.get("ada"));
+        io.printLine(ages.get("grace"));
+        io.printLine(ages.containsKey("alan"));
+        io.printLine(ages.containsKey("nobody"));
+
+        // Putting an existing key replaces rather than adds.
+        ages.put("ada", 37);
+        io.printLine(ages.size());
+        io.printLine(ages.get("ada"));
+
+        io.printLine(ages.remove("alan"));
+        io.printLine(ages.remove("alan"));
+        io.printLine(ages.size());
+        io.printLine(ages.containsKey("alan"));
+        // A probe still reaches what was behind the removed bucket.
+        io.printLine(ages.get("grace"));
+
+        // Enough entries to force a rehash, with every key still findable.
+        Map<int32, int32> squares = Map<int32, int32>();
+        int32 k = 0;
+        while (k < 50) {
+            squares.put(k, khuStdMath.multiply(k, k));
+            k = khuStdMath.add(k, 1);
+        }
+        io.printLine(squares.size());
+        io.printLine(squares.get(0));
+        io.printLine(squares.get(7));
+        io.printLine(squares.get(49));
+        io.printLine(squares.containsKey(50));
+
+        int32 missing = 0;
+        int32 c = 0;
+        while (c < 50) {
+            if (!squares.containsKey(c)) { missing = khuStdMath.add(missing, 1); }
+            c = khuStdMath.add(c, 1);
+        }
+        io.printLine(missing);
+        io.printLine(squares.keys().size());
+
+        ages.clear();
+        io.printLine(ages.size());
+        io.printLine(ages.isEmpty());
+
+        // A container of containers.
+        List<List<int32>> rows = List<List<int32>>();
+        List<int32> row = List<int32>();
+        row.add(5);
+        rows.add(row);
+        io.printLine(rows.get(0).get(0));
+    }
+}

@@ -28,6 +28,10 @@ enum ObjectFlags : std::uint32_t {
     // and the object has been registered as live.
     kObjectMaterialized = 1u << 2,
     kObjectMarked = 1u << 3,
+    // An array rather than a class instance: its slots are elements, its
+    // element count comes from `size` rather than from a class descriptor, and
+    // it has no vtable at all (docs/memory-model.md).
+    kObjectArray = 1u << 4,
 };
 
 struct ObjectHeader {
@@ -50,6 +54,15 @@ struct Object {
 
     bool is_manual() const { return (header.flags & kObjectManual) != 0; }
     bool is_managed() const { return (header.flags & kObjectGc) != 0; }
+    bool is_array() const { return (header.flags & kObjectArray) != 0; }
+
+    // How many elements an array holds. The allocation is a header followed by
+    // exactly the elements, so the length is implied by the size and does not
+    // need a word of its own in every object that is not an array.
+    std::uint32_t array_length() const {
+        if (!is_array() || header.size < sizeof(Object)) return 0;
+        return static_cast<std::uint32_t>((header.size - sizeof(Object)) / sizeof(Value));
+    }
 };
 
 }  // namespace khu::vm

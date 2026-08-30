@@ -197,13 +197,17 @@ set(KHU_NATIVE_TEST_BIN "${CMAKE_BINARY_DIR}/native-tests")
 # Registers the native variants of one golden program: the same .expected file
 # run through `run --native` and through a binary written by `khudra build`,
 # plus the differential that compares all three backends without a golden at all.
-function(khu_add_native_tests name source expected)
+# `expected_err` names the file holding the program's expected stderr. It does
+# not have to exist: a program with nothing to say on stderr has no such file,
+# and the runners only compare the channel when one is there.
+function(khu_add_native_tests name source expected expected_err)
     add_test(
         NAME golden_native_${name}
         COMMAND ${CMAKE_COMMAND}
             -DKHUDRA=$<TARGET_FILE:khudra>
             -DSOURCE=${source}
             -DEXPECTED=${expected}
+            -DEXPECTED_ERR=${expected_err}
             -DBACKEND=native
             -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
     add_test(
@@ -212,6 +216,7 @@ function(khu_add_native_tests name source expected)
             -DKHUDRA=$<TARGET_FILE:khudra>
             -DSOURCE=${source}
             -DEXPECTED=${expected}
+            -DEXPECTED_ERR=${expected_err}
             -DOUTPUT=${KHU_NATIVE_TEST_BIN}/build_${name}
             -P ${CMAKE_SOURCE_DIR}/tests/integration/run_build.cmake)
     add_test(
@@ -223,18 +228,37 @@ function(khu_add_native_tests name source expected)
             -P ${CMAKE_SOURCE_DIR}/tests/integration/run_differential.cmake)
 endfunction()
 
-file(GLOB KHU_GOLDEN_TESTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/integration/*.khu")
-foreach(golden ${KHU_GOLDEN_TESTS})
+# Registers one golden program under all three backends. `prefix` keeps the
+# test names of the subdirectories apart from the top-level ones.
+function(khu_add_golden prefix golden)
     get_filename_component(golden_name "${golden}" NAME_WE)
     get_filename_component(golden_dir "${golden}" DIRECTORY)
+    set(name "${prefix}${golden_name}")
     add_test(
-        NAME golden_${golden_name}
+        NAME golden_${name}
         COMMAND ${CMAKE_COMMAND}
             -DKHUDRA=$<TARGET_FILE:khudra>
             -DSOURCE=${golden}
             -DEXPECTED=${golden_dir}/${golden_name}.expected
+            -DEXPECTED_ERR=${golden_dir}/${golden_name}.expected-err
             -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
-    khu_add_native_tests(${golden_name} ${golden} ${golden_dir}/${golden_name}.expected)
+    khu_add_native_tests(${name} ${golden}
+        ${golden_dir}/${golden_name}.expected
+        ${golden_dir}/${golden_name}.expected-err)
+endfunction()
+
+# The top-level goldens, plus the per-namespace standard-library goldens that
+# PLAN.md puts under tests/integration/stdlib/. Both are picked up without
+# editing this file.
+file(GLOB KHU_GOLDEN_TESTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/integration/*.khu")
+foreach(golden ${KHU_GOLDEN_TESTS})
+    khu_add_golden("" "${golden}")
+endforeach()
+
+file(GLOB KHU_STDLIB_GOLDEN_TESTS CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/tests/integration/stdlib/*.khu")
+foreach(golden ${KHU_STDLIB_GOLDEN_TESTS})
+    khu_add_golden("stdlib_" "${golden}")
 endforeach()
 
 # A built binary must be a native program, not a VM carrying one.
@@ -263,6 +287,34 @@ foreach(bad ${KHU_ERROR_TESTS})
             -P ${CMAKE_SOURCE_DIR}/tests/integration/run_error.cmake)
 endforeach()
 
+# Runtime-failure tests: each tests/integration/runtime_errors/<name>.khu must
+# compile but then trap at runtime on every backend, mentioning every line of
+# <name>.expected-error on stderr. These cover faults that only show up while a
+# program runs (a use-after-free, an out-of-range buffer access, ...), which the
+# `check`-based run_error.cmake harness cannot see.
+file(GLOB KHU_RUNTIME_ERROR_TESTS CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/tests/integration/runtime_errors/*.khu")
+foreach(bad ${KHU_RUNTIME_ERROR_TESTS})
+    get_filename_component(bad_name "${bad}" NAME_WE)
+    get_filename_component(bad_dir "${bad}" DIRECTORY)
+    add_test(
+        NAME traps_${bad_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${bad}
+            -DEXPECTED=${bad_dir}/${bad_name}.expected-error
+            -DRUN_ARGS=run
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_runtime_error.cmake)
+    add_test(
+        NAME traps_native_${bad_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${bad}
+            -DEXPECTED=${bad_dir}/${bad_name}.expected-error
+            -DRUN_ARGS=run --native
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_runtime_error.cmake)
+endforeach()
+
 # Every sample program must pass semantic analysis, and -- where an expected
 # output is recorded next to it -- produce exactly that output. The programs
 # live in examples/ so they stay readable on their own; only the goldens live
@@ -280,7 +332,9 @@ foreach(example ${KHU_EXAMPLES})
                 -DKHUDRA=$<TARGET_FILE:khudra>
                 -DSOURCE=${example}
                 -DEXPECTED=${example_golden}
+                -DEXPECTED_ERR=${CMAKE_SOURCE_DIR}/tests/integration/examples/${example_name}.expected-err
                 -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
-        khu_add_native_tests(example_${example_name} ${example} ${example_golden})
+        khu_add_native_tests(example_${example_name} ${example} ${example_golden}
+            "${CMAKE_SOURCE_DIR}/tests/integration/examples/${example_name}.expected-err")
     endif()
 endforeach()

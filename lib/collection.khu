@@ -1,0 +1,75 @@
+// khuStdCollection -- the array substrate.
+//
+// A Khudra `Array<T>` is a fixed-length, garbage-collected block of elements.
+// It is the one container the runtime knows about; everything with a growth
+// policy is written on top of it in Khudra.
+//
+// ## Creating one
+//
+// `arrayCreate` is the second member in the standard library whose first
+// argument is a *type*, and it is one for the same reason `khuStdMath.convertTo`
+// is: the element type is the whole point of the call, and Khudra has no way to
+// write a type as a parameter. So it is a compiler intrinsic rather than a
+// declaration, it lowers to the `arraynew` instruction, and it cannot appear in
+// this file:
+//
+//     Array<int32> counts = khuStdCollection.arrayCreate(int32, 8);
+//     Array<string> names = khuStdCollection.arrayCreate(string, 3);
+//
+// A fresh array holds its element type's default: 0 for a number, false for a
+// bool, `null` -- not instantiated yet -- for a reference.
+//
+// ## Reading and writing
+//
+// `[]` reads and writes an element, and it is the language's, not this
+// namespace's:
+//
+//     counts[0] = 5;
+//     io.printLine(counts[0]);
+//
+// An index outside the array is a **fatal runtime error**, not a sentinel.
+// That is deliberate and it is the opposite of the choice `khuStdString.charAt`
+// makes: a string index reaches into data, where being out of range is an
+// ordinary answer, while an array index reaches into storage the program
+// itself sized, where being out of range is a bug in the program.
+//
+// ## Erasure
+//
+// `Array<T>` is checked, not reified: the compiler knows the element type, the
+// runtime does not. An array is a block of tagged values at run time, whatever
+// the source said it held. Two consequences worth knowing:
+//
+//   - A bare `Array` -- the untyped form that predates generics, and what
+//     `khu.getType()` still returns -- is the same runtime thing. It converts
+//     to and from any `Array<T>` freely, and it cannot be indexed, because
+//     indexing needs an element type and it has not got one.
+//   - Arrays are always garbage collected. A manual object *stored in* one is
+//     pinned for as long as the slot holds it, the same way a field pins one.
+
+// ## Hashing an erased element
+//
+// A container over a `T` can do exactly two things to what it holds: ask what
+// bucket it belongs in, and ask whether two of them are the same. Neither can
+// be *declared* here, because both take a value of any type and Khudra has no
+// way to write that -- so, like `arrayCreate`, the compiler recognizes them:
+//
+//     khuStdCollection.hash(value) -> int32       always non-negative
+//     khuStdCollection.sameValue(a, b) -> bool
+//
+// Both are **deterministic**, which matters more than it looks: a `Map`'s
+// layout is decided by them, so if they varied by run or by backend, so would
+// its iteration order, and the byte-identical invariant would be a matter of
+// luck. A reference therefore hashes to 0 rather than to its address, which
+// means an object-keyed `Map` degrades to a linear scan. That is the price of
+// an answer that does not depend on where the allocator put things.
+//
+// `sameValue` compares numbers and bools by their **bits**, so -0.0 is not 0.0
+// and a NaN is itself. That is the rule a hash table needs -- equal keys must
+// hash equally -- and hashing the same bits is what makes it hold.
+
+public namespace khuStdCollection {
+
+    // How many elements `array` holds. Accepts any array, typed or not:
+    // a length does not depend on the element type.
+    native func arraySize(Array array) -> int32;
+}

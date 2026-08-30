@@ -47,12 +47,14 @@ instruction**, so a method's code is position independent.
 | `pop` | -- | `a` -> |
 | `dup` | -- | `a` -> `a a` |
 | `dup_x1` | -- | `a b` -> `b a b` |
+| `dup_x2` | -- | `a b c` -> `c a b c` |
 | `ldc` | u16 index | -> constant |
 | `null` / `true` / `false` | -- | -> literal |
 
-`dup_x1` exists so an assignment used as an expression can leave its value
-behind: `putfield` pops the value and then the receiver, so the copy has to be
-tucked underneath.
+`dup_x1` and `dup_x2` exist so an assignment used as an expression can leave its
+value behind. `putfield` pops the value and then the receiver, so one copy has
+to be tucked under two slots; `arrayset` also consumes an index, so its copy
+goes under three.
 
 ### Frame slots and fields
 
@@ -107,7 +109,7 @@ never evaluated when the left already decides the answer.
 | Instruction | Operands |
 |---|---|
 | `call` | u16 method index -- non-virtual |
-| `invokevirtual` | u16 vtable slot, u8 argument count |
+| `invokevirtual` | u16 vtable slot, u8 argument count, u8 leaves-a-value |
 | `callnative` | u16 native id, u8 argument count |
 
 The receiver is pushed first, then the arguments. `call` takes its argument
@@ -121,8 +123,19 @@ constructor -- and `invokevirtual` everywhere else: it reads the receiver's
 is a copy of its base's with overridden slots replaced, so the receiver's own
 table is the whole of dynamic dispatch.
 
-Native ids are listed in `src/lib/bytecode/native.h` and are shared by the
-front end and the VM, so an image written by one loads in the other.
+`invokevirtual`'s third operand says whether the call leaves a value behind. The
+interpreter does not need it -- it resolves the method and then knows -- but the
+native emitter walks a method with an abstract operand stack *before* it writes
+any code, and a slot number on its own does not answer the question: slot 2 is a
+getter in one inheritance chain and a void method in an unrelated one. The front
+end knows at the call site, so it records the answer rather than leaving the
+backend to infer it from the image. The host still re-checks it against the
+method it resolved.
+
+Native ids are listed in `src/lib/bytecode/native.h` and are shared by the front
+end, both backends and the C emitter, so an image written by one loads in the
+other. The same table records how many values each native leaves behind, which
+is what the emitter's abstract stack reads.
 
 ### Memory
 
@@ -133,6 +146,23 @@ front end and the VM, so an image written by one loads in the other.
 | `manualalloc` | u16 class id | raw manual allocation |
 | `free` | -- | release a manual object |
 | `pin` / `unpin` | -- | adjust a manual object's pin count |
+| `arraynew` | type | `n` -> a fresh array of `n` elements |
+| `arraylen` | -- | `array` -> `int32` |
+| `arrayget` | -- | `array index` -> element |
+| `arrayset` | -- | `array index value` -> |
+
+An array is a header followed by its elements and nothing else, so its length is
+read back out of `size` rather than stored again. It carries **no class
+descriptor**: `Array<T>` is erased, so an element is whatever tagged value was
+put there, and the collector traces an array by reading those tags instead of
+consulting a reference map. `arraynew`'s type operand is not part of the array
+-- it only decides what a fresh one is filled with, which is `0` for a number,
+`false` for a `bool` and `null` for a reference.
+
+`arrayget` and `arrayset` trap on a null array and on an index outside it;
+`arrayset` applies the same pin barrier `putfield` applies, so a manual object
+stored in an array slot is pinned while the slot holds it. `arraynew` is an
+allocation, so it is a safepoint.
 
 `materialize`'s strategy byte is 1 (`standard`) or 2 (`manual`), already
 resolved by the checker from the class default and the allocation-site override.

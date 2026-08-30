@@ -1,0 +1,8 @@
+type parameter 'T' is already declared
+a class with type parameters cannot extend another class
+cannot convert Box<int32> to Box<string> in the initializer of 'words'
+cannot convert string to int32 in argument 1 of call to 'Box.put'
+cannot convert int32 to string in the initializer of 'wrong'
+'Box' takes 1 type argument, not 0
+'Box' takes 1 type argument, not 2
+unknown type 'T'

@@ -265,6 +265,25 @@ ast::ClassDecl* Parser::parse_class(ast::Visibility visibility, bool explicit_vi
     decl->name_loc = current().loc;
     advance();
 
+    // `class List<T>`. A namespace has no instances, so it has nothing to
+    // parameterize.
+    if (check(TokenKind::Less)) {
+        if (is_namespace) error_at(current(), "a namespace cannot take type parameters");
+        advance();
+        while (true) {
+            if (!check(TokenKind::Identifier)) {
+                error_at(current(), "expected a type parameter name, found " +
+                                        describe(current()));
+                break;
+            }
+            decl->type_params.push(current().text);
+            decl->type_param_locs.push(current().loc);
+            advance();
+            if (!match(TokenKind::Comma)) break;
+        }
+        close_type_arguments();
+    }
+
     if (is_namespace && check(TokenKind::KwExtends)) {
         error_at(current(), "a namespace cannot extend anything");
     }
@@ -509,6 +528,41 @@ bool Parser::at_type_start() const {
            lexer::is_type_keyword(kind);
 }
 
+// Parses `< type, type, ... >` into `out`. The caller has checked that the
+// current token is the `<`.
+void Parser::parse_type_arguments(util::Array<ast::TypeNode*>& out) {
+    advance();  // '<'
+    if (check(TokenKind::Greater) || check(TokenKind::GreaterGreater)) {
+        error_at(current(), "expected a type argument");
+        close_type_arguments();
+        return;
+    }
+    while (true) {
+        ast::TypeNode* argument = parse_type();
+        if (!argument) break;
+        out.push(argument);
+        if (!match(TokenKind::Comma)) break;
+    }
+    close_type_arguments();
+}
+
+// Consumes the `>` that closes a type argument list.
+//
+// `Array<Array<int32>>` ends in a token the lexer scanned as `>>`, because it
+// scanned it without knowing it was closing two lists rather than shifting.
+// Rather than teach the lexer about context, the parser splits the token: it
+// takes one `>` and leaves a `>` behind for the enclosing list to take.
+void Parser::close_type_arguments() {
+    if (check(TokenKind::GreaterGreater)) {
+        lexer::Token& token = tokens_[cursor_];
+        token.kind = TokenKind::Greater;
+        token.text = token.text.substr(1);
+        token.loc.column += 1;
+        return;
+    }
+    expect(TokenKind::Greater, "to close a type argument list");
+}
+
 ast::TypeNode* Parser::parse_type() {
     diag::SourceLocation start = current().loc;
 
@@ -528,6 +582,12 @@ ast::TypeNode* Parser::parse_type() {
         node->builtin = builtin;
         node->name = current().text;  // preserve the alias as written
         advance();
+        // `Array<T>`. Array is the only parameterized builtin, so `<` after any
+        // other type name is not a type argument list and is left for the
+        // expression grammar.
+        if (builtin == ast::BuiltinType::Array && check(TokenKind::Less)) {
+            parse_type_arguments(node->arguments);
+        }
         return node;
     }
 
@@ -537,6 +597,7 @@ ast::TypeNode* Parser::parse_type() {
         node->loc = start;
         node->name = current().text;
         advance();
+        if (check(TokenKind::Less)) parse_type_arguments(node->arguments);
         return node;
     }
 
@@ -562,16 +623,58 @@ ast::BlockStmt* Parser::parse_block() {
     return block;
 }
 
+// Skips a `<...>` type argument list starting at `index` (which must be the
+// `<`), and returns the offset just past its `>`. Returns 0 when the list does
+// not close, so a malformed one falls back to the expression grammar rather
+// than swallowing the rest of the block. `>>` closes two levels, because the
+// lexer scanned it before it could know it was closing anything.
+std::size_t Parser::skip_type_arguments(std::size_t index) const {
+    int depth = 0;
+    for (std::size_t i = index; i < tokens_.size(); ++i) {
+        TokenKind kind = tokens_[i].kind;
+        if (kind == TokenKind::Less) {
+            ++depth;
+        } else if (kind == TokenKind::Greater) {
+            if (--depth == 0) return i + 1;
+        } else if (kind == TokenKind::GreaterGreater) {
+            depth -= 2;
+            if (depth == 0) return i + 1;
+            if (depth < 0) return 0;
+        } else if (kind == TokenKind::Semicolon || kind == TokenKind::LBrace ||
+                   kind == TokenKind::RBrace || kind == TokenKind::EndOfFile) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
 // Only `Type name` starts a local declaration; everything else beginning with
 // an identifier is an expression.
 bool Parser::at_local_declaration() const {
     TokenKind kind = current().kind;
     if (kind == TokenKind::Star) return true;
     if (lexer::is_type_keyword(kind)) {
+        // `Array<int32> counts` is a declaration; `Array<int32>` on its own is
+        // a type reference used as an argument. Which one it is only shows up
+        // past the type argument list, so the list is skipped to find out.
+        if (peek(1).kind == TokenKind::Less) {
+            std::size_t after = skip_type_arguments(cursor_ + 1);
+            return after != 0 && after < tokens_.size() &&
+                   tokens_[after].kind == TokenKind::Identifier;
+        }
         // `int64` alone is a type reference used as an argument, not a decl.
         return peek(1).kind == TokenKind::Identifier;
     }
-    if (kind == TokenKind::Identifier) return peek(1).kind == TokenKind::Identifier;
+    if (kind == TokenKind::Identifier) {
+        // The same question for a class name: `Box<int32> b` is a declaration,
+        // `a < b > c` is a chain of comparisons.
+        if (peek(1).kind == TokenKind::Less) {
+            std::size_t after = skip_type_arguments(cursor_ + 1);
+            return after != 0 && after < tokens_.size() &&
+                   tokens_[after].kind == TokenKind::Identifier;
+        }
+        return peek(1).kind == TokenKind::Identifier;
+    }
     return false;
 }
 
@@ -818,9 +921,26 @@ ast::Expr* Parser::parse_primary() {
         case TokenKind::KwStandard:
             advance();
             return arena_.create<ast::StrategyExpr>(loc, ast::Strategy::Gc);
-        case TokenKind::Identifier:
+        case TokenKind::Identifier: {
+            // `List<int32>` in expression position is a type: an allocation
+            // site (`List<int32>(...)`) or a type argument
+            // (`arrayCreate(Box<int32>, 2)`). `a < b > c` is a chain of
+            // comparisons. They are told apart by what follows the balanced
+            // `>`: a comparison cannot be followed by `(`, `,` or `)`, and each
+            // of those is somewhere a type belongs.
+            if (peek(1).kind == TokenKind::Less) {
+                std::size_t after = skip_type_arguments(cursor_ + 1);
+                if (after != 0 && after < tokens_.size() &&
+                    (tokens_[after].kind == TokenKind::LParen ||
+                     tokens_[after].kind == TokenKind::Comma ||
+                     tokens_[after].kind == TokenKind::RParen)) {
+                    ast::TypeNode* type = parse_type();
+                    return arena_.create<ast::TypeRefExpr>(loc, type);
+                }
+            }
             advance();
             return arena_.create<ast::IdentifierExpr>(loc, token.text);
+        }
         case TokenKind::KwProcedures:
             // Same reason as above: let Sema explain why this cannot be called.
             advance();

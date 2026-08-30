@@ -79,6 +79,43 @@ guess whether a slot holds a pointer. It doubles as the pin bookkeeping table --
 when the collector reclaims an object it walks the map and decrements the pin
 count of every `MANUAL_REF` slot.
 
+### 3.1 Arrays have no reference map
+
+An `Array<T>` is not a class instance: it has no class descriptor, no vtable and
+no reference map, because `Array<T>` is erased -- the element type is the
+checker's, and the runtime sees a block of tagged values. Its length is read
+back out of the header's `size`, since the allocation is exactly a header
+followed by its elements.
+
+An array is therefore traced by **tag** rather than by map: a slot holds a
+reference exactly when its tag says so, which is as precise an answer as a map
+gives. Pinning follows the same route -- storing a manual object into an array
+slot pins it, overwriting the slot drops the pin, and reclaiming the array drops
+every pin it was holding.
+
+Arrays are always garbage collected. There is no manual array: the manual side
+hands out fixed-size chunks from a per-class arena, and an array's size is not
+known until it is created.
+
+### 3.2 Erased slots
+
+A generic class is compiled once, so the `T` of a `List<T>` is one slot whatever
+the instantiation was. Its reference map entry is `DYNAMIC`: what is in it is
+only known at run time, so it is traced and pinned by the tag on the value, the
+same way an array's elements are. A manual object stored in a `T` slot is pinned
+exactly as it would be in a slot declared to hold one.
+
+### 3.3 Buffers
+
+`khuStdMem.alloc` hands out a block from this same allocator, so a buffer is
+counted in `khu_manual_live_bytes` alongside every manual object. It is not an
+object: it has no header the program can see, no class, no pin count, and the
+collector never walks it. What `alloc` hands out, `khuStdMem.release` takes back.
+
+Which blocks are live is tracked in a table beside the allocator rather than in
+the blocks themselves. That is what lets `khuStdMem` tell a double release from
+a first one without reading a header out of memory it has already given back.
+
 ## 4. Cross-strategy references
 
 The two halves of the heap can point at each other, and each direction has its
@@ -135,6 +172,26 @@ runtime:
    ```
    cannot free this object: it was already released
    ```
+
+A released object must not be *used* either. Field reads and writes, and method
+calls, that reach a released object trap:
+
+```
+use of an object after it was released (use-after-free)
+```
+
+The runtime keeps a small registry of released, not-yet-reallocated manual
+objects (`Heap::released_`). Every getfield/putfield and virtual call checks the
+target address against it *before* touching the object's storage, in both the
+interpreter (`Vm`) and the native host (they share the byte-identical trap). A
+chunk that a later `allocate` reuses is removed from the registry, so a brand
+new object at that address is not mistaken for the freed one.
+
+Looking the address up in the registry (rather than reading the object's own
+header) matters because releasing a chunk overwrites its header's first words
+with the arena's free-list link -- a released object no longer identifies
+itself. Checking by address is also constant-cost when nothing has been freed
+(the registry is empty), so the field-access fast path is untouched.
 
 Freeing a pinned object is a hard error rather than a silent leak because a
 dangling manual pointer inside a traced object would corrupt the next GC cycle.

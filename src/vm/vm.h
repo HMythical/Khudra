@@ -18,7 +18,9 @@ extern "C" {
 #include "util/array.h"
 #include "vm/class_table.h"
 #include "vm/heap.h"
+#include "vm/natives.h"
 #include "vm/object.h"
+#include "vm/runtime_strings.h"
 #include "vm/value.h"
 
 namespace khu::vm {
@@ -47,6 +49,11 @@ public:
     // Sends io.* output to `sink` instead of stdout. Used by the tests and by
     // `khudra run` when it needs to capture a program's output.
     void set_output_sink(std::string* sink) { sink_ = sink; }
+    // The same for the standard error stream (fd 2), which khuStdErr writes to.
+    // The two are captured separately because the invariant compares them
+    // separately: a program's stderr has to match across backends the way its
+    // stdout does.
+    void set_error_sink(std::string* sink) { err_sink_ = sink; }
     // Supplies io.readLine input instead of stdin.
     void set_input(std::string input) { input_ = std::move(input); }
 
@@ -85,6 +92,24 @@ public:
     void proc_report_error(const char* message);
 
 private:
+    // What vm/natives.h asks of a backend. Nested so it reaches the sinks, the
+    // string store and render_value without widening any of them.
+    class Services final : public NativeServices {
+    public:
+        explicit Services(Vm& vm) : vm_(vm) {}
+        void write_output(const std::string& text) override;
+        void write_error(const std::string& text) override;
+        const std::string* make_string(std::string text) override;
+        void flush_output() override;
+        void flush_error() override;
+        std::string read_line() override;
+        int read_byte() override;
+        std::string render(const Value& value) const override;
+
+    private:
+        Vm& vm_;
+    };
+
     struct Frame {
         const bytecode::MethodEntry* method = nullptr;
         std::uint32_t ip = 0;
@@ -109,6 +134,13 @@ private:
     // The materialization pipeline (docs/procedures.md). Phase 6 moves the
     // driving loop into the C engine; the steps themselves live here.
     bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
+    // The array instructions' shared checks and their write barrier.
+    bool array_operand(const Value& target, Object*& array);
+    bool array_index_in_range(const Object& array, std::int64_t index);
+    static void array_write_barrier(const Value& current, const Value& incoming);
+    // `pointer[index]` at `element`: reads into `out`, or writes `incoming`.
+    bool pointer_element(const Value& pointer, const Value& index, TypeTag element, Value* out,
+                         const Value* incoming);
     bool release_manual(Value target);
     // Allocates, collecting first when the heap has grown past its threshold.
     Object* allocate(RuntimeClass& type, bool manual);
@@ -144,10 +176,13 @@ private:
     util::Array<Frame*> frames_;
     std::string error_;
     std::string* sink_ = nullptr;
+    std::string* err_sink_ = nullptr;
     std::string input_;
     std::size_t input_offset_ = 0;
-    // Strings produced at run time (io.readLine); Values point into these.
-    util::Array<std::string*> runtime_strings_;
+    // Strings produced at run time rather than read from the constant pool;
+    // Values point into these.
+    RuntimeStringStore runtime_strings_;
+    Services services_{*this};
     std::uint64_t instructions_ = 0;
     std::uint32_t depth_ = 0;
 };

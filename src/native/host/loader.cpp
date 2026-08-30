@@ -82,6 +82,7 @@ NativeStatus run_jit(const bytecode::Module& module, int& exit_code, std::string
         NativeHost host(module, methods, *count);
         if (capture) {
             host.set_output_sink(&capture->output);
+            host.set_error_sink(&capture->error_output);
             if (!capture->input.empty()) host.set_input(capture->input);
         }
         if (!host.run()) {

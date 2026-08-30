@@ -36,6 +36,12 @@ public:
     // the given strategy. Returns nullptr when memory runs out.
     Object* allocate(RuntimeClass& type, bool manual);
 
+    // Allocates an array of `length` elements, each starting at the default
+    // for `element`. Arrays are always collected: they are variable-sized, and
+    // the manual side allocates from per-class arenas of one fixed chunk size.
+    // Returns nullptr when memory runs out or the length is not representable.
+    Object* allocate_array(std::uint32_t length, TypeTag element);
+
     // Releases a manual object. Returns false when `object` is not manual or is
     // not tracked here.
     bool free_manual(Object* object);
@@ -43,6 +49,15 @@ public:
     // True when `object` is on the live manual list. A released chunk is not,
     // which is how a double release is caught before its zeroed header is read.
     bool is_tracked_manual(const Object* object) const;
+
+    // True when `object` is a manual object that has been released but whose
+    // chunk has not been handed out again. Detecting this by address (rather
+    // than by reading the object header) is what lets a use-after-free trap:
+    // releasing a manual chunk overwrites its header's first words with the
+    // arena's free-list link, so a freed object no longer identifies itself.
+    // The registry is empty whenever nothing has been released, which keeps the
+    // field-access fast path constant-time.
+    bool is_released(const Object* object) const;
 
     // Frees one managed object without touching the live list. The collector
     // rebuilds the list as it sweeps, so unlinking per object would be wasted
@@ -70,6 +85,9 @@ private:
     util::Array<ManualArena*> arenas_;
     Object* managed_head_ = nullptr;
     Object* manual_head_ = nullptr;
+    // Manual objects that have been released and not yet reallocated. See
+    // `is_released`; reused chunks are removed in `allocate`.
+    util::Array<const Object*> released_;
     std::size_t managed_count_ = 0;
     std::size_t manual_count_ = 0;
     std::size_t managed_bytes_ = 0;

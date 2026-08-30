@@ -104,10 +104,18 @@ the `static inline` helpers in `khu_native_abi.h`, which carry the
 interpreter's exact wrapping, rounding, shift-count and division rules. They
 touch no runtime state, so they never leave the translation unit.
 
-**Everything else is a `khu_rt_*` call** into the host: fields, allocation,
-materialization, calls, natives, traps. Those are the operations with the heap,
-the collector or the Procedure engine behind them, and the point of the design
-is that they are *shared with the VM* rather than reimplemented.
+**Everything else is a `khu_rt_*` call** into the host: fields, array and
+pointer elements, allocation, materialization, calls, natives, traps. Those are
+the operations with the heap, the collector or the Procedure engine behind them,
+and the point of the design is that they are *shared with the VM* rather than
+reimplemented.
+
+The natives are shared more literally still. `src/vm/natives.cpp` holds one
+implementation of every one of them, and `Vm::call_native` and
+`NativeHost::call_native` are its two callers: what a native needs from the
+backend running it -- somewhere to put output, somewhere to put a string it
+produced, a line of input -- arrives through a `NativeServices` interface, and
+everything else about it is in one place where the two cannot drift.
 
 The emitted C compiles clean under `-std=c11 -Wall -Wextra -Wpedantic -Werror`;
 `native_emit.output_compiles_under_a_strict_compiler_mode` holds it there.
@@ -116,13 +124,21 @@ The emitted C compiles clean under `-std=c11 -Wall -Wextra -Wpedantic -Werror`;
 
 A vtable slot number only means something inside one inheritance chain — slot 0
 is `area` in the `Shape` chain and `main` in an unrelated class in the same
-image. So the emitter cannot ask "does slot 0 return a value" globally, and it
-does not: it tracks the class of each live slot alongside the stack height
-(from `this`, from a materialization, from an allocation, from a typed field
-read, through locals) and asks *the receiver's* class, which is what the
-interpreter does at run time when it dispatches through that object's own
-table. The host re-checks the answer against the resolved method and traps
-rather than trusting the prediction.
+image. So the emitter cannot ask "does slot 0 return a value" globally, and the
+abstract stack needs that answer before any receiver exists to ask.
+
+The front end knows at the call site, so `invokevirtual` carries it: a third
+operand saying whether the call leaves a value behind
+([`bytecode.md`](bytecode.md)). The emitter still tracks the class of each live
+slot alongside the stack height — from `this`, from a materialization, from an
+allocation, from a typed field read, through locals — and where the class *is*
+known it checks the operand against that class's own method rather than
+believing it. The host re-checks it again against the method it resolved.
+
+Before the operand existed, the emitter inferred the answer by scanning every
+class in the image for that slot and failing if they disagreed. That held only
+while an image's classes were the program's own; the standard library's classes
+made a disagreement ordinary rather than exceptional.
 
 ---
 
@@ -212,6 +228,7 @@ This is enforced, not asserted:
 | `build_*` (ctest) | a binary from `khudra build`, executed on its own, against the same golden |
 | `native_diff.*` (unit) | both backends in one process: widths, overflow, floats, dispatch, traps, input, manual memory, GC churn |
 | `native_abi.*` (unit) | `KhuValue`/`KhuObjectHeader` against `src/vm/value.h` and `src/vm/object.h`, plus the type tags, object flags and call-depth guard |
+| `natives.*` (unit) | every native id is known, sits in its namespace's reserved block, and declares the stack effect its signature implies |
 | `native_binary_has_no_interpreter` | no `khu::vm::Vm` symbol in a built binary |
 
 Everything stays green under `-DKHU_SANITIZE=ON`.

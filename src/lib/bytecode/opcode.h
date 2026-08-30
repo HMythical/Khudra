@@ -56,6 +56,7 @@ enum class OperandFormat : std::uint8_t {
     Type,        // one TypeTag
     TypeType,    // source TypeTag, destination TypeTag
     U16U8,       // index + a byte (count, strategy, ...)
+    U16U8U8,     // index + two bytes (slot, argc, "leaves a value behind")
 };
 
 // name, mnemonic, operand format
@@ -67,6 +68,10 @@ enum class OperandFormat : std::uint8_t {
     /* dup_x1 inserts a copy of the top value below the one under it, which is \
        what an assignment needs to leave its value behind after putfield. */   \
     X(DupX1,        "dup_x1",        OperandFormat::None)                  \
+    /* dup_x2 does the same two places down, which is what an element        \
+       assignment needs: arrayset consumes an array, an index and a value,    \
+       so leaving the value behind means tucking a copy under all three. */   \
+    X(DupX2,        "dup_x2",        OperandFormat::None)                  \
     X(LoadConst,    "ldc",           OperandFormat::U16)                   \
     X(LoadNull,     "null",          OperandFormat::None)                  \
     X(LoadTrue,     "true",          OperandFormat::None)                  \
@@ -114,7 +119,14 @@ enum class OperandFormat : std::uint8_t {
        sits underneath the arguments and the slot alone does not say how many \
        to skip past to reach it. */                                          \
     X(CallDirect,   "call",          OperandFormat::U16)                   \
-    X(CallVirtual,  "invokevirtual", OperandFormat::U16U8)                 \
+    /* invokevirtual's third operand says whether the call leaves a value      \
+       behind. The interpreter does not need it -- it resolves the method and   \
+       then knows -- but the native emitter walks the code with an abstract     \
+       stack before it writes anything, and a slot number alone does not say:   \
+       slot 2 is a getter in one chain and a void method in another. The front  \
+       end knows at the call site, so it records it rather than leaving the      \
+       backend to guess from the image. */                                     \
+    X(CallVirtual,  "invokevirtual", OperandFormat::U16U8U8)               \
     X(CallNative,   "callnative",    OperandFormat::U16U8)                 \
     /* memory */                                                           \
     X(Materialize,  "materialize",   OperandFormat::U16U8)                 \
@@ -123,6 +135,20 @@ enum class OperandFormat : std::uint8_t {
     X(Free,         "free",          OperandFormat::None)                  \
     X(Pin,          "pin",           OperandFormat::None)                  \
     X(Unpin,        "unpin",         OperandFormat::None)                  \
+    /* arrays. The element type is erased at run time -- every element is a  \
+       tagged Value, whatever the checker knew about it -- so only arraynew  \
+       carries a type, and only so a fresh Array<int32> starts at 0 rather   \
+       than at null. */                                                     \
+    X(ArrayNew,     "arraynew",      OperandFormat::Type)                  \
+    X(ArrayLen,     "arraylen",      OperandFormat::None)                  \
+    X(ArrayGet,     "arrayget",      OperandFormat::None)                  \
+    X(ArraySet,     "arrayset",      OperandFormat::None)                  \
+    /* raw pointers. The element type is the operand, because a `*T` carries   \
+       no tag of its own: what is at an address is whatever the pointer's type  \
+       said would be. Nothing bounds-checks these -- that is what "raw" means   \
+       -- but a null pointer traps. */                                        \
+    X(PtrGet,       "ptrget",        OperandFormat::Type)                  \
+    X(PtrSet,       "ptrset",        OperandFormat::Type)                  \
     /* termination */                                                      \
     X(Halt,         "halt",          OperandFormat::None)
 

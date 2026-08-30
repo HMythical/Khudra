@@ -38,6 +38,7 @@ std::uint32_t operand_size(OperandFormat format) {
         case OperandFormat::Type: return 1;
         case OperandFormat::TypeType: return 2;
         case OperandFormat::U16U8: return 3;
+        case OperandFormat::U16U8U8: return 4;
     }
     return 0;
 }

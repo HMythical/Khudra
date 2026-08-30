@@ -160,8 +160,16 @@ std::string disassemble_instruction(const Module& module, const MethodEntry& met
                 }
             } else {
                 out.append_uint(second);
-                if (op == Op::CallVirtual) out.append("    ; slot, argc");
             }
+            break;
+        }
+
+        case OperandFormat::U16U8U8: {
+            std::uint16_t slot = read_u16(method, operand);
+            std::uint8_t argc = operand + 2 < method.code.size() ? method.code[operand + 2] : 0;
+            std::uint8_t result = operand + 3 < method.code.size() ? method.code[operand + 3] : 0;
+            out.append_uint(slot).append(", ").append_uint(argc).append(", ").append_uint(result);
+            out.append("    ; slot, argc, leaves a value");
             break;
         }
 
@@ -229,8 +237,9 @@ std::string disassemble(const Module& module) {
 
         for (std::size_t f = 0; f < entry.fields.size(); ++f) {
             const FieldEntry& field = entry.fields[f];
-            const char* kind = field.ref_kind == kRefManaged   ? "managed-ref"
-                               : field.ref_kind == kRefManual ? "manual-ref"
+            const char* kind = field.ref_kind == kRefManaged    ? "managed-ref"
+                               : field.ref_kind == kRefManual  ? "manual-ref"
+                               : field.ref_kind == kRefDynamic ? "dynamic-ref"
                                                               : "raw";
             out.append("      slot ").append_uint(f).append("  ")
                 .append(field.is_public ? "public  " : "private ")

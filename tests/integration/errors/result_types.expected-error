@@ -1,0 +1,6 @@
+cannot convert Result<int32> to Result<string> in the initializer of 'text'
+cannot convert string to int32 in argument 1 of call to 'Result.withValue'
+cannot convert string to int32 in argument 1 of call to 'Result.withError'
+cannot convert int32 to string in argument 2 of call to 'Result.withError'
+namespace 'khuErrors' has no member 'Result'
+'Result' takes 1 type argument, not 0

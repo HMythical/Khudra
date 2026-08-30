@@ -29,7 +29,9 @@ extern "C" {
 #include "util/array.h"
 #include "vm/class_table.h"
 #include "vm/heap.h"
+#include "vm/natives.h"
 #include "vm/object.h"
+#include "vm/runtime_strings.h"
 #include "vm/value.h"
 
 namespace khu::native {
@@ -66,6 +68,9 @@ public:
     const std::string& error() const { return error_; }
 
     void set_output_sink(std::string* sink) { sink_ = sink; }
+    // The standard error stream (fd 2), captured separately from stdout so the
+    // differential tests can compare the two channels independently.
+    void set_error_sink(std::string* sink) { err_sink_ = sink; }
     void set_input(std::string input) { input_ = std::move(input); }
 
     const Heap& heap() const { return heap_; }
@@ -93,6 +98,15 @@ public:
                      bool expects_result);
     int call_native(KhuFrame* frame, std::uint16_t native_id, std::uint8_t argc,
                     const KhuValue* argv, KhuValue* out, bool expects_result);
+    int array_new(KhuFrame* frame, std::uint8_t element, const KhuValue* length, KhuValue* out);
+    int array_len(KhuFrame* frame, const KhuValue* array, KhuValue* out);
+    int array_get(KhuFrame* frame, const KhuValue* array, const KhuValue* index, KhuValue* out);
+    int array_set(KhuFrame* frame, const KhuValue* array, const KhuValue* index,
+                  const KhuValue* value);
+    int ptr_get(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                std::uint8_t element, KhuValue* out);
+    int ptr_set(KhuFrame* frame, const KhuValue* pointer, const KhuValue* index,
+                std::uint8_t element, const KhuValue* value);
     int ref_same(const KhuValue* left, const KhuValue* right);
     int raise(KhuFrame* frame, const char* message);
 
@@ -118,6 +132,24 @@ public:
     void proc_report_error(const char* message);
 
 private:
+    // What vm/natives.h asks of a backend -- the same interface the interpreter
+    // implements, so a native has one implementation and two callers.
+    class Services final : public khu::vm::NativeServices {
+    public:
+        explicit Services(NativeHost& host) : host_(host) {}
+        void write_output(const std::string& text) override;
+        void write_error(const std::string& text) override;
+        const std::string* make_string(std::string text) override;
+        void flush_output() override;
+        void flush_error() override;
+        std::string read_line() override;
+        int read_byte() override;
+        std::string render(const Value& value) const override;
+
+    private:
+        NativeHost& host_;
+    };
+
     // Invokes one lowered method. `argv` is the arguments in declaration order.
     bool call_method(std::int32_t method_index, Value receiver, const KhuValue* argv,
                      std::uint32_t argc, Value& result);
@@ -126,6 +158,11 @@ private:
     bool call_method_from_stack(std::int32_t method_index, Value receiver, Value& result);
 
     bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
+    // The array instructions' shared checks, matching KhudraVm's word for word.
+    bool array_operand(const Value& target, Object*& array);
+    bool array_index_in_range(const Object& array, std::int64_t index);
+    bool pointer_element(const Value& pointer, const Value& index, bytecode::TypeTag element,
+                         Value* out, const Value* incoming);
     bool release_manual(Value target);
     Object* allocate(RuntimeClass& type, bool manual);
     void write_barrier(Object* owner, const RuntimeClass& type, std::uint32_t slot,
@@ -160,9 +197,11 @@ private:
 
     std::string error_;
     std::string* sink_ = nullptr;
+    std::string* err_sink_ = nullptr;
     std::string input_;
     std::size_t input_offset_ = 0;
-    util::Array<std::string*> runtime_strings_;
+    khu::vm::RuntimeStringStore runtime_strings_;
+    Services services_{*this};
 };
 
 // The host the `khu_rt_*` shims route to. One at a time, like the Procedure

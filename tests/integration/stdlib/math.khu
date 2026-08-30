@@ -1,0 +1,87 @@
+// khuStdMath: the utilities, the transcendentals and the constants.
+//
+// Every operation is resolved by operand type, so this program is also a
+// statement about what does *not* need writing: there is no widening anywhere
+// in it, and every call names one width.
+bring khu::stdlib;
+
+public class Math {
+    func main() {
+        // Negation, as an intrinsic: the same instruction the `-` operator uses.
+        io.printLine(khuStdMath.neg(7));
+        io.printLine(khuStdMath.neg(-7));
+        io.printLine(khuStdMath.neg(2.5));
+
+        // abs wraps at the most negative value, the way negation does.
+        io.printLine(khuStdMath.abs(-9));
+        io.printLine(khuStdMath.abs(9));
+        int8 floorOfInt8 = -128;
+        io.printLine(khuStdMath.abs(floorOfInt8));
+        io.printLine(khuStdMath.abs(-2.5));
+
+        // min, max and clamp, across signedness and across widths.
+        io.printLine(khuStdMath.min(3, 8));
+        io.printLine(khuStdMath.max(3, 8));
+        io.printLine(khuStdMath.min(-3, -8));
+        uint8 low = 4;
+        uint8 high = 200;
+        io.printLine(khuStdMath.max(low, high));
+        io.printLine(khuStdMath.clamp(42, 0, 10));
+        io.printLine(khuStdMath.clamp(-42, 0, 10));
+        io.printLine(khuStdMath.clamp(5, 0, 10));
+        io.printLine(khuStdMath.clamp(1.5, 2.0, 3.0));
+
+        // signum reports a sign in the operand's own type.
+        io.printLine(khuStdMath.signum(-12));
+        io.printLine(khuStdMath.signum(0));
+        io.printLine(khuStdMath.signum(12));
+        io.printLine(khuStdMath.signum(-0.5));
+
+        // gcd and lcm work on magnitudes, so neither is ever negative.
+        io.printLine(khuStdMath.gcd(48, 18));
+        io.printLine(khuStdMath.gcd(-48, 18));
+        io.printLine(khuStdMath.gcd(0, 0));
+        io.printLine(khuStdMath.lcm(4, 6));
+        io.printLine(khuStdMath.lcm(0, 6));
+
+        // Integer pow wraps; a negative exponent truncates toward zero.
+        io.printLine(khuStdMath.pow(2, 10));
+        io.printLine(khuStdMath.pow(-2, 3));
+        io.printLine(khuStdMath.pow(7, 0));
+        io.printLine(khuStdMath.pow(2, -3));
+        io.printLine(khuStdMath.pow(1, -3));
+        io.printLine(khuStdMath.pow(-1, -3));
+
+        // Float pow and the transcendentals.
+        io.printLine(khuStdMath.pow(2.0, 0.5));
+        io.printLine(khuStdMath.sqrt(2.0));
+        io.printLine(khuStdMath.sqrt(-1.0));
+        io.printLine(khuStdMath.floor(-1.5));
+        io.printLine(khuStdMath.ceil(-1.5));
+        io.printLine(khuStdMath.round(-1.5));
+        io.printLine(khuStdMath.round(1.5));
+        io.printLine(khuStdMath.fmod(7.5, 2.0));
+        io.printLine(khuStdMath.exp(1.0));
+        io.printLine(khuStdMath.log(1.0));
+        io.printLine(khuStdMath.log10(1000.0));
+        io.printLine(khuStdMath.sin(0.0));
+        io.printLine(khuStdMath.cos(0.0));
+        io.printLine(khuStdMath.tan(0.0));
+        io.printLine(khuStdMath.asin(1.0));
+        io.printLine(khuStdMath.acos(1.0));
+        io.printLine(khuStdMath.atan(1.0));
+        io.printLine(khuStdMath.atan2(1.0, 1.0));
+        io.printLine(khuStdMath.sinh(0.0));
+        io.printLine(khuStdMath.cosh(0.0));
+        io.printLine(khuStdMath.tanh(0.0));
+
+        // A float transcendental rounds its result back to 32 bits.
+        float half = 0.5;
+        io.printLine(khuStdMath.sqrt(half));
+
+        // The constants are dfloat; convertTo moves one to a float.
+        io.printLine(khuStdMath.pi());
+        io.printLine(khuStdMath.e());
+        io.printLine(khuStdMath.convertTo(float, khuStdMath.pi()));
+    }
+}

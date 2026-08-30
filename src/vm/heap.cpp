@@ -45,6 +45,16 @@ Object* Heap::allocate(RuntimeClass& type, bool manual) {
     if (!storage) return nullptr;
 
     auto* object = static_cast<Object*>(storage);
+    // A chunk that a fresh allocation reuses is live again, so it must leave
+    // the released set or a stale alias to the previous owner would be
+    // mistaken for a freed object.
+    for (std::size_t i = 0; i < released_.size(); ++i) {
+        if (released_[i] == object) {
+            released_[i] = released_[released_.size() - 1];
+            released_.pop();
+            break;
+        }
+    }
     object->header.class_id = type.class_id;
     object->header.flags = manual ? kObjectManual : kObjectGc;
     object->header.pin_count = 0;
@@ -68,6 +78,36 @@ Object* Heap::allocate(RuntimeClass& type, bool manual) {
         ++managed_count_;
         managed_bytes_ += bytes;
     }
+    ++total_allocations_;
+    return object;
+}
+
+Object* Heap::allocate_array(std::uint32_t length, TypeTag element) {
+    // The header plus the elements, and nothing else: `array_length` reads the
+    // count back out of the size.
+    std::size_t bytes = sizeof(Object) + static_cast<std::size_t>(length) * sizeof(Value);
+    if (bytes > 0xffffffffull) return nullptr;
+
+    void* storage = std::calloc(1, bytes);
+    if (!storage) return nullptr;
+
+    auto* object = static_cast<Object*>(storage);
+    object->header.class_id = 0;
+    object->header.flags = kObjectGc | kObjectArray;
+    object->header.pin_count = 0;
+    object->header.size = static_cast<std::uint32_t>(bytes);
+    // No class descriptor: an array's shape is its length, and the collector
+    // reads a slot's tag rather than a reference map.
+    object->header.vtable = nullptr;
+
+    Value* slots = object->slots();
+    Value initial = default_value_for(element);
+    for (std::uint32_t i = 0; i < length; ++i) slots[i] = initial;
+
+    object->header.gc_link = managed_head_;
+    managed_head_ = object;
+    ++managed_count_;
+    managed_bytes_ += bytes;
     ++total_allocations_;
     return object;
 }
@@ -105,7 +145,22 @@ bool Heap::free_manual(Object* object) {
     unlink(manual_head_, object);
     --manual_count_;
     arena_for(*type).release(object);
+
+    // The chunk is now reachable only through stale aliases, which field
+    // access checks against `released_`. The entry survives until the chunk is
+    // handed out again (see `allocate`).
+    released_.push(object);
     return true;
+}
+
+bool Heap::is_released(const Object* object) const {
+    // Nothing has been freed, so nothing can be a dangling alias: this keeps
+    // the field-access fast path at constant cost for the common program.
+    if (released_.empty() || !object) return false;
+    for (std::size_t i = 0; i < released_.size(); ++i) {
+        if (released_[i] == object) return true;
+    }
+    return false;
 }
 
 void Heap::destroy_managed(Object* object) {

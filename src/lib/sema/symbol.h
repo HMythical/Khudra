@@ -115,6 +115,12 @@ struct ClassSymbol {
     ClassSymbol* base = nullptr;
     std::uint32_t class_id = 0;
 
+    // `class List<T>`: the parameter names, and the TypeParam type each one
+    // resolves to inside the body. Empty for an ordinary class.
+    util::Array<std::string_view> type_params;
+    util::Array<const Type*> type_param_types;
+    bool is_generic() const { return !type_params.empty(); }
+
     // Declared in this class, in source order.
     util::Array<VarSymbol*> fields;
     util::Array<MethodSymbol*> methods;
@@ -133,6 +139,8 @@ struct ClassSymbol {
     // Builtin namespaces (khu, khuStdMath, io) are classes that are never
     // materialized; their members are static.
     bool is_namespace = false;
+    // Declared by the embedded standard library rather than by the program.
+    bool from_stdlib = false;
 
     // Lookup that walks the inheritance chain.
     VarSymbol* find_field(std::string_view field_name);
@@ -152,7 +160,14 @@ struct Program {
     // namespaces live in `namespaces`.
     util::Array<ClassSymbol*> classes;
     util::Array<ClassSymbol*> namespaces;
+    // The program's own classes, plus every namespace. A name here wins.
     util::StringMap<ClassSymbol*> class_index;
+    // The standard library's classes. They are found from the program only when
+    // it has not declared that name itself -- so `List` means the program's
+    // `List` in a program that has one, and the library's everywhere else. The
+    // library resolves its own names the other way round, so its `Stack` still
+    // reaches its own `List`.
+    util::StringMap<ClassSymbol*> stdlib_class_index;
 
     // Entry dispatch (KHU-PLAN.md, Entry point): `main` when one exists,
     // otherwise the first top-level class is materialized and its Procedures
@@ -160,9 +175,18 @@ struct Program {
     MethodSymbol* main_function = nullptr;
     ClassSymbol* root_class = nullptr;
 
+    // Resolution from the program's side: its own names first.
     ClassSymbol* find_class(std::string_view name) {
-        ClassSymbol** found = class_index.find(name);
-        return found ? *found : nullptr;
+        if (ClassSymbol** found = class_index.find(name)) return *found;
+        if (ClassSymbol** found = stdlib_class_index.find(name)) return *found;
+        return nullptr;
+    }
+
+    // Resolution from inside the standard library: its own names first.
+    ClassSymbol* find_stdlib_class(std::string_view name) {
+        if (ClassSymbol** found = stdlib_class_index.find(name)) return *found;
+        if (ClassSymbol** found = class_index.find(name)) return *found;
+        return nullptr;
     }
 };
 

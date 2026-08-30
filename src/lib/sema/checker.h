@@ -13,6 +13,7 @@
 
 #include "diag/diagnostic.h"
 #include "parser/ast.h"
+#include "bytecode/native.h"
 #include "sema/access.h"
 #include "sema/memory_model.h"
 #include "sema/symbol.h"
@@ -31,6 +32,10 @@ struct ExprInfo {
     ClassSymbol* namespace_ref = nullptr; // `khuStdMath` in `khuStdMath.add(..)`
     Strategy alloc_strategy = Strategy::Gc;
     const Type* convert_target = nullptr; // khuStdMath.convertTo(<type>, ..)
+    // The element type of khuStdCollection.arrayCreate(<type>, n), and of an
+    // index expression's array. Codegen needs the first to know what to fill a
+    // fresh array with; the second is what an element read produces.
+    const Type* array_element = nullptr;
     bool is_allocation = false;
     bool through_this = false;            // reached via the current object
     bool is_lvalue = false;
@@ -51,6 +56,8 @@ public:
 private:
     // --- passes ---
     void declare_classes(ast::CompilationUnit& unit);
+    // Resolves a class name from the side the code being checked is on.
+    ClassSymbol* lookup_class(std::string_view name);
     void declare_namespace_members(ClassSymbol& symbol);
     void resolve_inheritance();
     void declare_members();
@@ -71,6 +78,15 @@ private:
 
     // --- types ---
     const Type* resolve_type(const ast::TypeNode* node);
+    // Generic substitution: replaces a class's type parameters with the
+    // arguments a use site wrote.
+    const Type* substitute(const Type* type, const ClassSymbol* owner,
+                           const util::Array<const Type*>& arguments);
+    const Type* substitute_through(const Type* type, const Type* receiver);
+
+    // The synthesized symbols for the erased-argument natives, created once.
+    util::StringMap<MethodSymbol*> erased_natives_;
+
     bool assignable(const Type* from, const Type* to) const;
     // Reports "cannot convert X to Y", naming convertTo when the two are
     // numeric -- the only sanctioned way across widths.
@@ -88,23 +104,35 @@ private:
     const Type* check_identifier(ast::IdentifierExpr& expr);
     const Type* check_member(ast::MemberExpr& expr, bool writing);
     const Type* check_call(ast::CallExpr& expr, const Type* expected);
-    const Type* check_allocation(ast::CallExpr& expr, ClassSymbol& target);
+    const Type* check_allocation(ast::CallExpr& expr, ClassSymbol& target,
+                                 const Type* instantiated = nullptr);
     const Type* check_binary(ast::BinaryExpr& expr, const Type* expected);
     const Type* check_unary(ast::UnaryExpr& expr, const Type* expected);
     const Type* check_assign(ast::AssignExpr& expr);
     const Type* check_index(ast::IndexExpr& expr);
     const Type* check_convert_intrinsic(ast::CallExpr& expr);
+    const Type* check_array_create_intrinsic(ast::CallExpr& expr);
+    // khuStdCollection.hash / .sameValue: natives that take a value of *any*
+    // type, which is the one shape a Khudra signature cannot express.
+    const Type* check_value_intrinsic(ast::CallExpr& expr, std::string_view member_name);
+    MethodSymbol* erased_native(std::string_view name, bytecode::NativeId id,
+                                const Type* return_type, std::size_t arity);
     const Type* check_strategy_factory(ast::CallExpr& expr, const ast::MemberExpr& callee);
     // Non-null when `object` names a built-in namespace rather than a value.
     ClassSymbol* namespace_receiver(ast::Expr* object);
     void report_stray_strategy(const ast::CallExpr& expr);
 
     // Resolves an overload set against already-typed arguments.
+    // `receiver` is the type the call is made through, so a generic class's
+    // parameters can be substituted before the arguments are compared. Null
+    // for a namespace member, a constructor or a call on `this`.
     MethodSymbol* resolve_overload(util::Array<MethodSymbol*>& candidates, ast::CallExpr& call,
                                    std::string_view display_name,
-                                   const Type* expected = nullptr);
+                                   const Type* expected = nullptr,
+                                   const Type* receiver = nullptr);
     bool bind_arguments(const util::Array<VarSymbol*>& params, ast::CallExpr& call,
-                        std::string_view what, diag::SourceLocation loc);
+                        std::string_view what, diag::SourceLocation loc,
+                        const Type* receiver = nullptr);
     void note_candidates(diag::DiagnosticEngine::Builder& builder,
                          const util::Array<MethodSymbol*>& candidates,
                          diag::SourceLocation loc);

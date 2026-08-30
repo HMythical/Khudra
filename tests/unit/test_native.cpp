@@ -37,6 +37,8 @@ bool compile_source(const std::string& source, khu::bytecode::Module& module,
 struct BackendRun {
     bool ran = false;
     std::string output;
+    // What the program wrote to standard error, as distinct from how it died.
+    std::string error_output;
     std::string runtime_error;
 };
 
@@ -44,6 +46,7 @@ BackendRun run_on_vm(const khu::bytecode::Module& module, const std::string& inp
     BackendRun result;
     khu::vm::Vm vm(module);
     vm.set_output_sink(&result.output);
+    vm.set_error_sink(&result.error_output);
     if (!input.empty()) vm.set_input(input);
     result.ran = vm.run();
     result.runtime_error = vm.error();
@@ -69,6 +72,7 @@ bool run_on_native(const khu::bytecode::Module& module, const std::string& input
     }
     result.ran = exit_code == 0;
     result.output = capture.output;
+    result.error_output = capture.error_output;
     result.runtime_error = capture.runtime_error;
     return true;
 }
@@ -82,6 +86,7 @@ void check_module_identical(const khu::bytecode::Module& module, const std::stri
     if (!run_on_native(module, input, actual, backend_error)) return;  // no host compiler
 
     KHU_CHECK_EQ(actual.output, expected.output);
+    KHU_CHECK_EQ(actual.error_output, expected.error_output);
     KHU_CHECK_EQ(actual.runtime_error, expected.runtime_error);
     KHU_CHECK_EQ(actual.ran, expected.ran);
 }
@@ -130,11 +135,21 @@ KHU_TEST(native_emit, lowers_a_method_to_a_readable_c_function) {
     KHU_CHECK_EQ(emitted.error, std::string());
 
     // The operand stack is gone: every push is an assignment to a fixed slot,
-    // and the frame is one array the collector can walk.
-    KHU_CHECK_CONTAINS(emitted.source, "static int khu_m0(KhuValue self, const KhuValue* argv,");
-    KHU_CHECK_CONTAINS(emitted.source, "KhuValue V[3];");
+    // and the frame is one array the collector can walk. The method's index
+    // depends on how many methods the standard library brought with it, so it
+    // is found rather than assumed.
+    std::string main_index;
+    for (std::size_t i = 0; i < module.methods.size(); ++i) {
+        if (module.string_at(module.methods[i].name) == "main") {
+            main_index = std::to_string(i);
+        }
+    }
+    KHU_CHECK(!main_index.empty());
     KHU_CHECK_CONTAINS(emitted.source,
-                       "khu_rt_frame_enter(&F, V, 0u, 1u, 3u, self, argv, 0u);");
+                       "static int khu_m" + main_index + "(KhuValue self, const KhuValue* argv,");
+    KHU_CHECK_CONTAINS(emitted.source, "KhuValue V[3];");
+    KHU_CHECK_CONTAINS(emitted.source, "khu_rt_frame_enter(&F, V, " + main_index +
+                                           "u, 1u, 3u, self, argv, 0u);");
     KHU_CHECK_CONTAINS(emitted.source, "V[1] = khu_rt_constants[");
     KHU_CHECK_CONTAINS(emitted.source, "khu_val_arith(KHU_A_ADD, 3u, &V[1], &V[2], &V[1])");
     // The safepoint publishes where we are and how much of the frame is live.
@@ -142,7 +157,6 @@ KHU_TEST(native_emit, lowers_a_method_to_a_readable_c_function) {
     KHU_CHECK_CONTAINS(emitted.source, "khu_rt_call_native(&F, 2u, 1u, &V[1], &V[1], 0)");
     KHU_CHECK_CONTAINS(emitted.source, "KHU_RETURN(&F);");
     KHU_CHECK_CONTAINS(emitted.source, "const KhuNativeMethod khu_native_methods[] = {");
-    KHU_CHECK_CONTAINS(emitted.source, "const uint32_t khu_native_method_count = 1u;");
 }
 
 KHU_TEST(native_emit, is_reproducible) {
@@ -319,6 +333,516 @@ KHU_TEST(native_diff, floating_point_rounding) {
                             "        io.printLine(d);\n"
                             "        io.printLine(f + f);\n"
                             "        io.printLine(d / 4.0);"));
+}
+
+// The standard library's natives run in the host, not in the emitted C, so a
+// disagreement here would mean the two backends were calling different code --
+// which is exactly what src/vm/natives.cpp exists to prevent.
+KHU_TEST(native_diff, math_utilities_at_their_edges) {
+    check_identical(program("        int8 floorOfInt8 = -128;\n"
+                            "        io.printLine(khuStdMath.abs(floorOfInt8));\n"
+                            "        io.printLine(khuStdMath.neg(floorOfInt8));\n"
+                            "        io.printLine(khuStdMath.signum(floorOfInt8));\n"
+                            "        uint8 wide = 200;\n"
+                            "        uint8 narrow = 4;\n"
+                            "        io.printLine(khuStdMath.min(wide, narrow));\n"
+                            "        io.printLine(khuStdMath.max(wide, narrow));\n"
+                            "        io.printLine(khuStdMath.clamp(wide, narrow, narrow));\n"
+                            "        io.printLine(khuStdMath.gcd(0, 0));\n"
+                            "        io.printLine(khuStdMath.gcd(-48, 18));\n"
+                            "        io.printLine(khuStdMath.lcm(0, 6));\n"
+                            "        int64 big = 4000000000;\n"
+                            "        io.printLine(khuStdMath.lcm(big, big));"));
+}
+
+KHU_TEST(native_diff, integer_pow_wraps_and_truncates) {
+    check_identical(program("        io.printLine(khuStdMath.pow(2, 31));\n"
+                            "        io.printLine(khuStdMath.pow(2, 32));\n"
+                            "        io.printLine(khuStdMath.pow(-3, 3));\n"
+                            "        io.printLine(khuStdMath.pow(7, 0));\n"
+                            "        io.printLine(khuStdMath.pow(2, -3));\n"
+                            "        io.printLine(khuStdMath.pow(1, -3));\n"
+                            "        io.printLine(khuStdMath.pow(-1, -3));\n"
+                            "        io.printLine(khuStdMath.pow(-1, -4));\n"
+                            "        uint8 base = 3;\n"
+                            "        uint8 exponent = 6;\n"
+                            "        io.printLine(khuStdMath.pow(base, exponent));"));
+}
+
+// A float transcendental is computed at 64 bits and rounded back to 32, so it
+// has to round the same way in both backends -- and differently from the
+// dfloat it was computed alongside.
+KHU_TEST(native_diff, transcendentals_round_to_their_width) {
+    check_identical(program("        float narrow = 0.5;\n"
+                            "        dfloat wide = 0.5;\n"
+                            "        io.printLine(khuStdMath.sqrt(narrow));\n"
+                            "        io.printLine(khuStdMath.sqrt(wide));\n"
+                            "        io.printLine(khuStdMath.exp(narrow));\n"
+                            "        io.printLine(khuStdMath.exp(wide));\n"
+                            "        io.printLine(khuStdMath.pow(wide, wide));\n"
+                            "        io.printLine(khuStdMath.atan2(wide, wide));\n"
+                            "        io.printLine(khuStdMath.pi());\n"
+                            "        io.printLine(khuStdMath.e());"));
+}
+
+// Domain errors are values, not traps: they render through the same formatter
+// on both sides.
+KHU_TEST(native_diff, float_domain_errors_are_values) {
+    check_identical(program("        io.printLine(khuStdMath.sqrt(-1.0));\n"
+                            "        io.printLine(khuStdMath.log(0.0));\n"
+                            "        io.printLine(khuStdMath.log(-1.0));\n"
+                            "        io.printLine(khuStdMath.asin(2.0));\n"
+                            "        io.printLine(khuStdMath.fmod(1.0, 0.0));"));
+}
+
+// And a native that does trap traps identically, with the same message and the
+// same stack trace.
+KHU_TEST(native_diff, a_native_trap_reads_the_same_on_both_backends) {
+    check_identical(program("        io.printLine(khuStdMath.clamp(5, 10, 0));"));
+}
+
+KHU_TEST(native_diff, a_negative_power_of_zero_is_a_division_by_zero) {
+    check_identical(program("        io.printLine(khuStdMath.pow(0, -1));"));
+}
+
+// A native that produces a *string* allocates it in the backend's own runtime
+// store, so this is where the two stores have to behave the same way.
+KHU_TEST(native_diff, conversions_round_trip_through_runtime_strings) {
+    check_identical(program("        io.printLine(khuStdConv.toString(-98765));\n"
+                            "        io.printLine(khuStdConv.parseInt32(khuStdConv.toString(7)));\n"
+                            "        io.printLine(khuStdConv.toString(1.5));\n"
+                            "        float narrow = 0.1;\n"
+                            "        io.printLine(khuStdConv.toString(narrow));\n"
+                            "        io.printLine(khuStdConv.parseFloat(\"0.1\"));\n"
+                            "        io.printLine(khuStdConv.parseDFloat(\"0.1\"));\n"
+                            "        io.printLine(khuStdConv.toChar(65));"));
+}
+
+KHU_TEST(native_diff, a_failed_parse_answers_with_the_same_sentinel) {
+    check_identical(program("        io.printLine(khuStdConv.parseInt8(\"128\"));\n"
+                            "        io.printLine(khuStdConv.parseInt64(\"9223372036854775808\"));\n"
+                            "        io.printLine(khuStdConv.parseUInt16(\"-1\"));\n"
+                            "        io.printLine(khuStdConv.parseUInt64(\"18446744073709551616\"));\n"
+                            "        io.printLine(khuStdConv.parseDFloat(\"1.5e\"));\n"
+                            "        io.printLine(khuStdConv.parseFloat(\"\"));\n"
+                            "        io.printLine(khuStdConv.isNumeric(\"12 \"));"));
+}
+
+// Every string operation allocates its result in the backend's own store, and
+// the ones that answer a sentinel have to answer the same sentinel.
+KHU_TEST(native_diff, string_operations_agree_including_their_edges) {
+    check_identical(program("        string text = \"Hello, Khudra\";\n"
+                            "        io.printLine(khuStdString.length(text));\n"
+                            "        io.printLine(khuStdString.charAt(text, 999));\n"
+                            "        io.printLine(khuStdString.charAt(text, -1));\n"
+                            "        io.printLine(khuStdString.substring(text, 7, 999));\n"
+                            "        io.printLine(khuStdString.substring(text, 9, 3));\n"
+                            "        io.printLine(khuStdString.indexOf(text, \"zzz\"));\n"
+                            "        io.printLine(khuStdString.indexOf(text, \"\"));\n"
+                            "        io.printLine(khuStdString.lastIndexOf(text, \"l\"));\n"
+                            "        io.printLine(khuStdString.compareTo(\"abc\", \"abcd\"));\n"
+                            "        io.printLine(khuStdString.replaceAll(\"aaa\", \"aa\", \"b\"));\n"
+                            "        io.printLine(khuStdString.replaceAll(\"a-b\", \"\", \"+\"));\n"
+                            "        io.printLine(khuStdString.repeat(\"ab\", -2));\n"
+                            "        io.printLine(khuStdString.trim(\"  x  \"));\n"
+                            "        io.printLine(khuStdString.concat(text, \"!\"));"));
+}
+
+// A string operation on a null reference is not an index out of range: there is
+// no string there at all, and it traps the same way a null field read does.
+KHU_TEST(native_diff, a_string_operation_on_null_traps_identically) {
+    check_identical(
+        "bring khu::stdlib;\n\n"
+        "public class T {\n"
+        "    public string held;\n"
+        "    func main() {\n"
+        "        io.printLine(khuStdString.length(this.held));\n"
+        "    }\n"
+        "}\n");
+}
+
+// Arrays are the one place where allocation, indexing and the write barrier all
+// meet, and the element type is erased at run time -- so both backends have to
+// agree about a block of tagged values with no descriptor behind it.
+KHU_TEST(native_diff, typed_arrays_read_and_write_the_same) {
+    check_identical(program(
+        "        Array<int32> counts = khuStdCollection.arrayCreate(int32, 4);\n"
+        "        io.printLine(khuStdCollection.arraySize(counts));\n"
+        "        io.printLine(counts[0]);\n"
+        "        counts[2] = 7;\n"
+        "        io.printLine(counts[2]);\n"
+        "        int32 kept = (counts[1] = 9);\n"
+        "        io.printLine(kept);\n"
+        "        Array<string> names = khuStdCollection.arrayCreate(string, 2);\n"
+        "        io.printLine(names[0]);\n"
+        "        names[0] = \"x\";\n"
+        "        io.printLine(names[0]);\n"
+        "        Array<dfloat> ratios = khuStdCollection.arrayCreate(dfloat, 1);\n"
+        "        io.printLine(ratios[0]);\n"
+        "        Array<bool> flags = khuStdCollection.arrayCreate(bool, 1);\n"
+        "        io.printLine(flags[0]);\n"
+        "        Array<Array<int32>> grid = khuStdCollection.arrayCreate(Array<int32>, 1);\n"
+        "        grid[0] = counts;\n"
+        "        io.printLine(grid[0][2]);\n"
+        "        Array bare = counts;\n"
+        "        io.printLine(khuStdCollection.arraySize(bare));\n"
+        "        string word = \"Khudra\";\n"
+        "        io.printLine(word[1]);"));
+}
+
+KHU_TEST(native_diff, an_index_out_of_range_traps_identically) {
+    check_identical(program(
+        "        Array<int32> counts = khuStdCollection.arrayCreate(int32, 2);\n"
+        "        io.printLine(counts[5]);"));
+}
+
+KHU_TEST(native_diff, a_negative_index_traps_identically) {
+    check_identical(program(
+        "        Array<int32> counts = khuStdCollection.arrayCreate(int32, 2);\n"
+        "        counts[-1] = 0;"));
+}
+
+KHU_TEST(native_diff, indexing_a_null_array_traps_identically) {
+    check_identical(
+        "bring khu::stdlib;\n\n"
+        "public class T {\n"
+        "    public Array<int32> held;\n"
+        "    func main() {\n"
+        "        io.printLine(this.held[0]);\n"
+        "    }\n"
+        "}\n");
+}
+
+KHU_TEST(native_diff, a_negative_array_length_traps_identically) {
+    check_identical(program(
+        "        io.printLine(khuStdCollection.arraySize("
+        "khuStdCollection.arrayCreate(int32, -1)));"));
+}
+
+// An array holds references, and the collector has to find them through it: an
+// array is traced by tag rather than through a reference map, because it has
+// no class descriptor to carry one.
+KHU_TEST(native_diff, the_collector_walks_arrays) {
+    check_identical(
+        "bring khu::stdlib;\n\n"
+        "public class Cell {\n"
+        "    public int32 value = 0;\n"
+        "    public Cell(int32 v) { this.value = v; }\n"
+        "}\n\n"
+        "public class T {\n"
+        "    func main() {\n"
+        "        Array<Cell> kept = khuStdCollection.arrayCreate(Cell, 4);\n"
+        "        kept[0] = Cell(1);\n"
+        "        kept[3] = Cell(2);\n"
+        "        int32 i = 0;\n"
+        "        while (i < 400) {\n"
+        "            Cell garbage = Cell(i);\n"
+        "            i = khuStdMath.add(i, 1);\n"
+        "        }\n"
+        "        io.printLine(kept[0].value);\n"
+        "        io.printLine(kept[3].value);\n"
+        "    }\n"
+        "}\n");
+}
+
+// A generic class is compiled once and its slots are erased, so what the two
+// backends see is a class whose fields hold whatever an instantiation put
+// there. Both have to trace and pin those slots by tag.
+KHU_TEST(native_diff, generic_classes_behave_the_same) {
+    check_identical(
+        "bring khu::stdlib;\n\n"
+        "public class Box<T> {\n"
+        "    private T held;\n"
+        "    public func put(T value) { this.held = value; }\n"
+        "    public func get() -> T { return this.held; }\n"
+        "}\n\n"
+        "public class T {\n"
+        "    func main() {\n"
+        "        Box<int32> numbers = Box<int32>();\n"
+        "        io.printLine(numbers.get());\n"
+        "        numbers.put(42);\n"
+        "        io.printLine(numbers.get());\n"
+        "        Box<string> words = Box<string>();\n"
+        "        words.put(\"hi\");\n"
+        "        io.printLine(words.get());\n"
+        "        Box<dfloat> ratios = Box<dfloat>();\n"
+        "        ratios.put(1.5);\n"
+        "        io.printLine(ratios.get());\n"
+        "    }\n"
+        "}\n");
+}
+
+// An erased slot holding a manual object still pins it: the pin comes from the
+// tag on the value, not from a static answer in the reference map.
+KHU_TEST(native_diff, an_erased_slot_pins_a_manual_object) {
+    check_identical(
+        "bring khu::stdlib;\n\n"
+        "public class Node {\n"
+        "    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();\n"
+        "    public int32 value = 0;\n"
+        "    public Node(int32 v) { this.value = v; }\n"
+        "}\n\n"
+        "public class Box<T> {\n"
+        "    private T held;\n"
+        "    public func put(T value) { this.held = value; }\n"
+        "    public func get() -> T { return this.held; }\n"
+        "}\n\n"
+        "public class T {\n"
+        "    func main() {\n"
+        "        Box<Node> box = Box<Node>();\n"
+        "        Node n = Node(7);\n"
+        "        box.put(n);\n"
+        "        io.printLine(box.get().value);\n"
+        "        free(n);\n"
+        "    }\n"
+        "}\n");
+}
+
+// Result and Option are ordinary Khudra classes in the standard library, so
+// this is also the test that a stdlib class behaves the same under both
+// backends -- including when it ends the program.
+KHU_TEST(native_diff, results_carry_a_value_or_a_failure) {
+    check_identical(program(
+        "        Result<int32> good = Result<int32>().withValue(7);\n"
+        "        io.printLine(good.ok());\n"
+        "        io.printLine(good.value());\n"
+        "        io.printLine(good.unwrapOr(0));\n"
+        "        Result<int32> bad = Result<int32>().withError(khuErrors.parse(), \"bad\");\n"
+        "        io.printLine(bad.ok());\n"
+        "        io.printLine(bad.errorCode());\n"
+        "        io.printLine(bad.errorMessage());\n"
+        "        io.printLine(bad.unwrapOr(-1));\n"
+        "        Option<string> none = Option<string>();\n"
+        "        io.printLine(none.isEmpty());\n"
+        "        io.printLine(none.orElse(\"absent\"));\n"
+        "        Parse parse = Parse();\n"
+        "        io.printLine(parse.toInt32(\"42\").value());\n"
+        "        io.printLine(parse.toInt32(\"x\").errorMessage());\n"
+        "        io.printLine(parse.toUInt8(\"-1\").ok());"));
+}
+
+// khuErrors.fail is the one way Khudra source raises a fatal error, and the
+// trap it produces has to be the same on both backends down to the frame the
+// standard library contributes to the trace.
+KHU_TEST(native_diff, reading_a_failed_result_traps_identically) {
+    check_identical(program(
+        "        Result<int32> bad = Result<int32>().withError(khuErrors.parse(), \"bad\");\n"
+        "        io.printLine(bad.value());"));
+}
+
+KHU_TEST(native_diff, reading_an_empty_option_traps_identically) {
+    check_identical(program("        io.printLine(Option<int32>().value());"));
+}
+
+// The containers are Khudra code over Array<T>, so this is the test that a
+// program's data structures -- growth, rehashing, tombstones, the collector
+// walking through all of it -- behave the same under both backends.
+KHU_TEST(native_diff, containers_agree_through_growth_and_removal) {
+    check_identical(program(
+        "        List<int32> items = List<int32>();\n"
+        "        int32 i = 0;\n"
+        "        while (i < 40) {\n"
+        "            items.add(khuStdMath.multiply(i, i));\n"
+        "            i = khuStdMath.add(i, 1);\n"
+        "        }\n"
+        "        io.printLine(items.size());\n"
+        "        io.printLine(items.get(39));\n"
+        "        io.printLine(items.removeAt(0));\n"
+        "        io.printLine(items.get(0));\n"
+        "        io.printLine(items.indexOf(100));\n"
+        "        io.printLine(items.remove(100));\n"
+        "        io.printLine(items.size());\n"
+        "        Stack<int32> stack = Stack<int32>();\n"
+        "        stack.push(1);\n"
+        "        stack.push(2);\n"
+        "        io.printLine(stack.pop());\n"
+        "        Queue<int32> queue = Queue<int32>();\n"
+        "        int32 q = 0;\n"
+        "        while (q < 30) {\n"
+        "            queue.enqueue(q);\n"
+        "            if (khuStdMath.remainder(q, 3) == 0) { queue.dequeue(); }\n"
+        "            q = khuStdMath.add(q, 1);\n"
+        "        }\n"
+        "        io.printLine(queue.size());\n"
+        "        io.printLine(queue.peek());"));
+}
+
+// A Map's layout is decided by khuStdCollection.hash, so its bucket order --
+// and therefore keys() -- is only reproducible if the two backends hash
+// identically.
+KHU_TEST(native_diff, a_map_lays_out_the_same_table_on_both_backends) {
+    check_identical(program(
+        "        Map<int32, int32> squares = Map<int32, int32>();\n"
+        "        int32 i = 0;\n"
+        "        while (i < 40) {\n"
+        "            squares.put(i, khuStdMath.multiply(i, i));\n"
+        "            i = khuStdMath.add(i, 1);\n"
+        "        }\n"
+        "        io.printLine(squares.size());\n"
+        "        io.printLine(squares.remove(7));\n"
+        "        io.printLine(squares.containsKey(7));\n"
+        "        io.printLine(squares.get(39));\n"
+        "        List<int32> keys = squares.keys();\n"
+        "        int32 k = 0;\n"
+        "        while (k < keys.size()) {\n"
+        "            io.print(keys.get(k));\n"
+        "            io.print(\" \");\n"
+        "            k = khuStdMath.add(k, 1);\n"
+        "        }\n"
+        "        io.printLine(\"\");\n"
+        "        Map<string, int32> named = Map<string, int32>();\n"
+        "        named.put(\"ada\", 1);\n"
+        "        named.put(\"alan\", 2);\n"
+        "        io.printLine(named.get(\"ada\"));\n"
+        "        io.printLine(named.getOrElse(\"nobody\", -1));"));
+}
+
+KHU_TEST(native_diff, a_container_read_out_of_range_traps_identically) {
+    check_identical(program("        List<int32> items = List<int32>();\n"
+                            "        items.add(1);\n"
+                            "        io.printLine(items.get(5));"));
+}
+
+KHU_TEST(native_diff, an_empty_container_traps_identically) {
+    check_identical(program("        io.printLine(Stack<int32>().pop());"));
+}
+
+KHU_TEST(native_diff, a_missing_map_key_traps_identically) {
+    check_identical(program("        io.printLine(Map<string, int32>().get(\"absent\"));"));
+}
+
+// The typed reads are readLine plus the shared parser, so the sentinel a bad
+// line produces has to be the same one on both backends.
+KHU_TEST(native_diff, typed_reads_agree_including_their_sentinels) {
+    check_identical(program("        io.printLine(io.readInt32());\n"
+                            "        io.printLine(io.readInt32());\n"
+                            "        io.printLine(io.readUInt8());\n"
+                            "        io.printLine(io.readDFloat());\n"
+                            "        io.printLine(io.readBool());\n"
+                            "        io.printLine(io.readBool());\n"
+                            "        io.printLine(io.readLine());\n"
+                            "        io.printLine(io.readInt32());"),
+                    "42\nnonsense\n-1\n2.5\ntrue\nyes\ntail\n");
+}
+
+// readChar and readByte read from the same position readLine does, and they
+// disagree only about how they report the end of input.
+KHU_TEST(native_diff, byte_reads_share_the_line_readers_position) {
+    check_identical(program("        io.printLine(io.readChar());\n"
+                            "        io.printLine(io.readLine());\n"
+                            "        io.printLine(io.readByte());\n"
+                            "        io.printLine(io.readByte());\n"
+                            "        io.printLine(io.readChar());"),
+                    "abc\n");
+}
+
+// The two streams are separate, and both are compared.
+KHU_TEST(native_diff, the_error_stream_agrees_too) {
+    check_identical(program("        io.printLine(\"one\");\n"
+                            "        khuStdErr.errPrintLine(\"two\");\n"
+                            "        khuStdErr.errPrint(3);\n"
+                            "        khuStdErr.errPrint(\" \");\n"
+                            "        khuStdErr.errPrintLine(1.5);\n"
+                            "        khuStdErr.errWriteString(\"raw\\n\");\n"
+                            "        io.writeString(\"four\\n\");\n"
+                            "        io.flush();\n"
+                            "        khuStdErr.flush();"));
+}
+
+KHU_TEST(native_diff, describe_renders_what_print_has_no_overload_for) {
+    check_identical(
+        "bring khu::stdlib;\n\n"
+        "public class Cell { public int32 value = 0; }\n\n"
+        "public class T {\n"
+        "    func main() {\n"
+        "        io.printLine(io.describe(Cell()));\n"
+        "        io.printLine(io.describe(khuStdCollection.arrayCreate(int32, 3)));\n"
+        "        io.printLine(io.describe(7));\n"
+        "        io.printLine(io.describe(null));\n"
+        "        io.printLine(io.describe(1.5));\n"
+        "    }\n"
+        "}\n");
+}
+
+// Buffers are the raw side of the memory model: both backends allocate from the
+// same C allocator, so both see the same header, the same length checks and the
+// same leak counters.
+KHU_TEST(native_diff, manual_buffers_agree) {
+    check_identical(program(
+        "        io.printLine(khuStdMem.liveBlocks());\n"
+        "        *byte buffer = khuStdMem.alloc(16);\n"
+        "        io.printLine(khuStdMem.sizeOf(buffer));\n"
+        "        io.printLine(buffer[0]);\n"
+        "        buffer[0] = 65;\n"
+        "        buffer[15] = 90;\n"
+        "        io.printLine(buffer[0]);\n"
+        "        io.printLine(buffer[15]);\n"
+        "        khuStdMem.fill(buffer, 3, 8);\n"
+        "        io.printLine(buffer[7]);\n"
+        "        *byte other = khuStdMem.alloc(16);\n"
+        "        io.printLine(khuStdMem.compare(buffer, other, 16));\n"
+        "        khuStdMem.copy(other, buffer, 16);\n"
+        "        io.printLine(khuStdMem.compare(buffer, other, 16));\n"
+        "        io.printLine(khuStdMem.refEquals(buffer, other));\n"
+        "        buffer = khuStdMem.realloc(buffer, 4);\n"
+        "        io.printLine(khuStdMem.sizeOf(buffer));\n"
+        "        *int32 words = khuStdMem.alloc(16);\n"
+        "        words[2] = -70000;\n"
+        "        io.printLine(words[2]);\n"
+        "        io.printLine(words[0]);\n"
+        "        khuStdMem.release(words);\n"
+        "        khuStdMem.release(other);\n"
+        "        khuStdMem.release(buffer);\n"
+        "        io.printLine(khuStdMem.liveBlocks());\n"
+        "        io.printLine(khuStdMem.liveBytes());"));
+}
+
+KHU_TEST(native_diff, a_buffer_operation_past_the_end_traps_identically) {
+    check_identical(program("        *byte buffer = khuStdMem.alloc(4);\n"
+                            "        khuStdMem.fill(buffer, 1, 8);"));
+}
+
+KHU_TEST(native_diff, releasing_a_buffer_twice_traps_identically) {
+    check_identical(program("        *byte buffer = khuStdMem.alloc(4);\n"
+                            "        khuStdMem.release(buffer);\n"
+                            "        khuStdMem.release(buffer);"));
+}
+
+KHU_TEST(native_diff, reaching_through_a_null_pointer_traps_identically) {
+    check_identical(program("        *byte buffer = null;\n"
+                            "        io.printLine(buffer[0]);"));
+}
+
+KHU_TEST(native_diff, overlapping_copy_is_refused_identically) {
+    check_identical(program("        *byte buffer = khuStdMem.alloc(8);\n"
+                            "        khuStdMem.copy(buffer, buffer, 8);"));
+}
+
+// The generator is the same state machine on both sides, so a seeded program
+// produces the same sequence under either. That is the whole reason it is
+// deterministic.
+KHU_TEST(native_diff, the_random_stream_is_the_same_on_both_backends) {
+    check_identical(program("        io.printLine(khuStdRandom.nextInt());\n"
+                            "        khuStdRandom.seed(1234);\n"
+                            "        int32 i = 0;\n"
+                            "        while (i < 8) {\n"
+                            "            io.printLine(khuStdRandom.nextInt());\n"
+                            "            io.printLine(khuStdRandom.nextInt(100));\n"
+                            "            io.printLine(khuStdRandom.nextInt64());\n"
+                            "            io.printLine(khuStdRandom.nextFloat());\n"
+                            "            io.printLine(khuStdRandom.nextDouble());\n"
+                            "            io.printLine(khuStdRandom.nextBool());\n"
+                            "            i = khuStdMath.add(i, 1);\n"
+                            "        }\n"
+                            "        *byte buffer = khuStdMem.alloc(16);\n"
+                            "        khuStdRandom.nextBytes(buffer, 16);\n"
+                            "        io.printLine(buffer[0]);\n"
+                            "        io.printLine(buffer[15]);\n"
+                            "        khuStdMem.release(buffer);"));
+}
+
+KHU_TEST(native_diff, an_empty_random_bound_traps_identically) {
+    check_identical(program("        io.printLine(khuStdRandom.nextInt(0));"));
 }
 
 KHU_TEST(native_diff, control_flow) {

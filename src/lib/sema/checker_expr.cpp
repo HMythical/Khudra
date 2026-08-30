@@ -102,7 +102,12 @@ const Type* Checker::check_expr(ast::Expr* expr, const Type* expected) {
                 break;
             }
             info.through_this = true;
-            info.type = types_.class_type(current_class_);
+            // Inside `List<T>`, `this` is a `List<T>`: substituting through it
+            // is then the identity, which is exactly right -- a member seen
+            // from inside still speaks in the class's own parameters.
+            info.type = current_class_->is_generic()
+                            ? types_.class_type(current_class_, current_class_->type_param_types)
+                            : types_.class_type(current_class_);
             break;
 
         case ast::ExprKind::Identifier:
@@ -203,7 +208,7 @@ const Type* Checker::check_identifier(ast::IdentifierExpr& expr) {
         }
     }
 
-    if (ClassSymbol* symbol = program_->find_class(expr.name)) {
+    if (ClassSymbol* symbol = lookup_class(expr.name)) {
         if (symbol->is_namespace) {
             diagnostics_.error(expr.loc, "'" + std::string(expr.name) +
                                              "' is a namespace; call one of its members");
@@ -228,7 +233,7 @@ ClassSymbol* Checker::namespace_receiver(ast::Expr* object) {
     if (!scopes_.empty() && scopes_.back()->lookup(ident->name)) return nullptr;
     if (current_class_ && current_class_->find_field(ident->name)) return nullptr;
 
-    ClassSymbol* symbol = program_->find_class(ident->name);
+    ClassSymbol* symbol = lookup_class(ident->name);
     return symbol && symbol->is_namespace ? symbol : nullptr;
 }
 
@@ -288,7 +293,7 @@ const Type* Checker::check_member(ast::MemberExpr& expr, bool writing) {
         info.var = field;
         info.through_this = through_this;
         info.is_lvalue = true;
-        return field->type;
+        return substitute_through(field->type, object);
     }
 
     util::Array<MethodSymbol*> candidates;
@@ -310,7 +315,8 @@ const Type* Checker::check_member(ast::MemberExpr& expr, bool writing) {
 // ---------------------------------------------------------------------------
 
 bool Checker::bind_arguments(const util::Array<VarSymbol*>& params, ast::CallExpr& call,
-                             std::string_view what, diag::SourceLocation loc) {
+                             std::string_view what, diag::SourceLocation loc,
+                             const Type* receiver) {
     if (call.args.size() != params.size()) {
         diagnostics_.error(loc, std::string(what) + " expects " +
                                     std::to_string(params.size()) + " argument" +
@@ -322,7 +328,7 @@ bool Checker::bind_arguments(const util::Array<VarSymbol*>& params, ast::CallExp
 
     bool ok = true;
     for (std::size_t i = 0; i < params.size(); ++i) {
-        const Type* wanted = params[i]->type;
+        const Type* wanted = substitute_through(params[i]->type, receiver);
         const Type* got = call.args[i]->info ? call.args[i]->info->type : nullptr;
         // Re-check literals so they take the parameter's width.
         if (!got || is_numeric_literal(call.args[i])) got = check_expr(call.args[i], wanted);
@@ -337,7 +343,7 @@ bool Checker::bind_arguments(const util::Array<VarSymbol*>& params, ast::CallExp
 
 MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
                                         ast::CallExpr& call, std::string_view display_name,
-                                        const Type* expected) {
+                                        const Type* expected, const Type* receiver) {
     util::Array<MethodSymbol*> by_arity;
     for (MethodSymbol* candidate : candidates) {
         if (candidate->params.size() == call.args.size()) by_arity.push(candidate);
@@ -355,7 +361,7 @@ MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
 
     if (by_arity.size() == 1) {
         bind_arguments(by_arity[0]->params, call, "call to '" + std::string(display_name) + "'",
-                       call.loc);
+                       call.loc, receiver);
         return by_arity[0];
     }
 
@@ -372,7 +378,7 @@ MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
     //   3. anything a literal could still adapt to.
     auto accepts = [&](MethodSymbol* candidate, bool exact) {
         for (std::size_t i = 0; i < actual.size(); ++i) {
-            const Type* wanted = candidate->params[i]->type;
+            const Type* wanted = substitute_through(candidate->params[i]->type, receiver);
             if (exact ? (actual[i] == wanted) : assignable(actual[i], wanted)) continue;
             // In the loose round a numeric literal has not committed to a
             // width yet, so it fits any numeric parameter. In the exact round
@@ -391,7 +397,7 @@ MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
             if (candidate->return_type != expected) continue;
             if (!accepts(candidate, false)) continue;
             bind_arguments(candidate->params, call,
-                           "call to '" + std::string(display_name) + "'", call.loc);
+                           "call to '" + std::string(display_name) + "'", call.loc, receiver);
             return candidate;
         }
     }
@@ -402,7 +408,7 @@ MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
     }
     if (exact.size() == 1) {
         bind_arguments(exact[0]->params, call, "call to '" + std::string(display_name) + "'",
-                       call.loc);
+                       call.loc, receiver);
         return exact[0];
     }
 
@@ -413,7 +419,7 @@ MethodSymbol* Checker::resolve_overload(util::Array<MethodSymbol*>& candidates,
 
     if (viable.size() == 1) {
         bind_arguments(viable[0]->params, call, "call to '" + std::string(display_name) + "'",
-                       call.loc);
+                       call.loc, receiver);
         return viable[0];
     }
 
@@ -516,7 +522,7 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
                         (current_class_ && current_class_->find_field(ident->name));
 
         if (!shadowed) {
-            if (ClassSymbol* target = program_->find_class(ident->name)) {
+            if (ClassSymbol* target = lookup_class(ident->name)) {
                 if (target->is_namespace) {
                     diagnostics_.error(expr.callee->loc, "'" + std::string(ident->name) +
                                                              "' is a namespace, not a function");
@@ -546,6 +552,27 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
         return types_.error();
     }
 
+    // `List<int32>(...)`: a class name with its type arguments written out.
+    // Only the parser's allocation-site reading produces this shape.
+    if (auto* type_ref = expr.callee->as<ast::TypeRefExpr>()) {
+        const ast::TypeNode* node = type_ref->type;
+        if (node && node->kind == ast::TypeNode::Kind::Named) {
+            ClassSymbol* target = lookup_class(node->name);
+            if (!target || target->is_namespace) {
+                diagnostics_.error(expr.callee->loc,
+                                   "unknown type '" + std::string(node->name) + "'");
+                for (ast::Expr* argument : expr.args) check_expr(argument);
+                return types_.error();
+            }
+            const Type* instantiated = resolve_type(node);
+            if (!instantiated || instantiated->is_error()) {
+                for (ast::Expr* argument : expr.args) check_expr(argument);
+                return types_.error();
+            }
+            return check_allocation(expr, *target, instantiated);
+        }
+    }
+
     if (auto* member = expr.callee->as<ast::MemberExpr>()) {
         if (member->object && member->object->kind == ast::ExprKind::TypeRef) {
             return check_strategy_factory(expr, *member);
@@ -555,6 +582,27 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
             info.namespace_ref = space;
             if (space->name == kMathNamespace && member->name == "convertTo") {
                 return check_convert_intrinsic(expr);
+            }
+            // The second member whose first argument is a type, and for the
+            // same reason: the element type is what the call is *for*, and
+            // there is no way to write a type as a parameter.
+            if (space->name == kCollectionNamespace && member->name == "arrayCreate") {
+                return check_array_create_intrinsic(expr);
+            }
+            // `hash` and `sameValue` take a value of *any* type. That is the
+            // one shape a Khudra signature cannot express -- there is no `any`
+            // -- and it is exactly what a container over an erased element
+            // needs, so the checker recognizes them the way it recognizes a
+            // type-taking intrinsic.
+            if (space->name == kCollectionNamespace &&
+                (member->name == "hash" || member->name == "sameValue")) {
+                return check_value_intrinsic(expr, member->name);
+            }
+            // The same shape again: `io.describe` renders a value of any type,
+            // which is what makes it the answer for the ones `io.print` has no
+            // overload for.
+            if (space->name == kIoNamespace && member->name == "describe") {
+                return check_value_intrinsic(expr, member->name);
             }
 
             util::Array<MethodSymbol*> candidates;
@@ -608,7 +656,7 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
         }
 
         std::string display = std::string(owner->name) + "." + std::string(member->name);
-        MethodSymbol* method = resolve_overload(candidates, expr, display, expected);
+        MethodSymbol* method = resolve_overload(candidates, expr, display, expected, object);
         if (!method) return types_.error();
 
         bool through_this = member->object->kind == ast::ExprKind::This;
@@ -618,7 +666,7 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
                              member->name_loc);
         info.method = method;
         info.through_this = through_this;
-        return method->return_type;
+        return substitute_through(method->return_type, object);
     }
 
     check_expr(expr.callee);
@@ -627,15 +675,35 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
     return types_.error();
 }
 
-const Type* Checker::check_allocation(ast::CallExpr& expr, ClassSymbol& target) {
+const Type* Checker::check_allocation(ast::CallExpr& expr, ClassSymbol& target,
+                                      const Type* instantiated) {
     ExprInfo& info = info_for(expr);
     info.is_allocation = true;
     info.alloc_class = &target;
     info.alloc_strategy = memory_.resolve_allocation_strategy(target, expr);
 
+    // A generic class is allocated with its arguments written out --
+    // `List<int32>()` -- because nothing infers them. There is one compiled
+    // class behind every instantiation; the arguments are what the checker
+    // remembers on the caller's behalf.
+    if (!instantiated) {
+        if (target.is_generic()) {
+            diagnostics_
+                .error(expr.callee->loc, "'" + std::string(target.name) + "' takes " +
+                                             std::to_string(target.type_params.size()) +
+                                             " type argument" +
+                                             (target.type_params.size() == 1 ? "" : "s"))
+                .note(expr.callee->loc, "write them at the allocation site: " +
+                                            std::string(target.name) + "<int32>(...)");
+            for (ast::Expr* argument : expr.args) check_expr(argument);
+            return types_.error();
+        }
+        instantiated = types_.class_type(&target);
+    }
+
     bind_arguments(materialization_params(target), expr,
-                   "materializing '" + std::string(target.name) + "'", expr.loc);
-    return types_.class_type(&target);
+                   "materializing '" + std::string(target.name) + "'", expr.loc, instantiated);
+    return instantiated;
 }
 
 const Type* Checker::check_strategy_factory(ast::CallExpr& expr, const ast::MemberExpr& callee) {
@@ -720,9 +788,144 @@ const Type* Checker::check_convert_intrinsic(ast::CallExpr& expr) {
 // Operators
 // ---------------------------------------------------------------------------
 
+const Type* Checker::check_array_create_intrinsic(ast::CallExpr& expr) {
+    ExprInfo& info = info_for(expr);
+
+    if (expr.args.size() != 2) {
+        diagnostics_
+            .error(expr.loc, "khuStdCollection.arrayCreate expects an element type and a count")
+            .note(expr.loc, "for example: khuStdCollection.arrayCreate(int32, 8)");
+        for (ast::Expr* argument : expr.args) check_expr(argument);
+        return types_.error();
+    }
+
+    // A built-in type name parses as a type reference; a class name parses as
+    // an identifier, because until it is looked up there is no telling a class
+    // from a variable. Both are types here.
+    const Type* element = nullptr;
+    if (auto* type_ref = expr.args[0]->as<ast::TypeRefExpr>()) {
+        element = resolve_type(type_ref->type);
+        if (element && element->is_error()) {
+            check_expr(expr.args[1]);
+            return types_.error();
+        }
+    } else if (auto* named = expr.args[0]->as<ast::IdentifierExpr>()) {
+        // A type parameter is spelled like an identifier and shadows a class of
+        // the same name, exactly as it does in a type position.
+        if (current_class_) {
+            for (std::size_t i = 0; i < current_class_->type_params.size(); ++i) {
+                if (current_class_->type_params[i] == named->name) {
+                    element = current_class_->type_param_types[i];
+                }
+            }
+        }
+        if (!element) {
+            ClassSymbol* symbol = lookup_class(named->name);
+            if (symbol && !symbol->is_namespace) element = types_.class_type(symbol);
+        }
+    }
+    if (!element) {
+        diagnostics_
+            .error(expr.args[0]->loc,
+                   "the first argument of khuStdCollection.arrayCreate must be a type")
+            .note(expr.args[0]->loc, "for example: khuStdCollection.arrayCreate(int32, 8)");
+        check_expr(expr.args[1]);
+        return types_.error();
+    }
+    info_for(*expr.args[0]).type = element;
+
+    const Type* count = check_expr(expr.args[1], types_.int32());
+    if (element->is_error() || (count && count->is_error())) return types_.error();
+
+    if (element->is_void()) {
+        diagnostics_.error(expr.args[0]->loc, "'void' is not an element type");
+        return types_.error();
+    }
+    if (!assignable(count, types_.int32())) {
+        report_mismatch(expr.args[1]->loc, count, types_.int32(),
+                        "as the length of khuStdCollection.arrayCreate");
+        return types_.error();
+    }
+
+    info.array_element = element;
+    return types_.array_of(element);
+}
+
+// A synthesized signature for a native the standard library cannot declare.
+// Created once per name and kept, so every call site resolves to the same
+// symbol and codegen sees an ordinary native call.
+MethodSymbol* Checker::erased_native(std::string_view name, bytecode::NativeId id,
+                                     const Type* return_type, std::size_t arity) {
+    if (MethodSymbol** found = erased_natives_.find(name)) return *found;
+
+    auto* method = arena_.create<MethodSymbol>();
+    method->name = name;
+    method->form = ast::MethodForm::Func;
+    method->visibility = ast::Visibility::Public;
+    method->return_type = return_type;
+    method->is_static = true;
+    method->is_native = true;
+    method->native_id = static_cast<std::uint32_t>(id);
+    // The parameters exist so arity checks read normally; their types are never
+    // consulted, because the whole point is that any type is accepted.
+    for (std::size_t i = 0; i < arity; ++i) {
+        auto* param = arena_.create<VarSymbol>();
+        param->role = VarRole::Parameter;
+        param->type = types_.error();
+        method->params.push(param);
+    }
+    erased_natives_.insert(name, method);
+    return method;
+}
+
+const Type* Checker::check_value_intrinsic(ast::CallExpr& expr, std::string_view member_name) {
+    ExprInfo& info = info_for(expr);
+    bool is_describe = member_name == "describe";
+    bool is_hash = member_name == "hash";
+    std::size_t arity = member_name == "sameValue" ? 2u : 1u;
+    std::string qualified =
+        (is_describe ? std::string("io.") : std::string("khuStdCollection.")) +
+        std::string(member_name);
+
+    if (expr.args.size() != arity) {
+        diagnostics_.error(expr.loc, qualified + " takes " + std::to_string(arity) +
+                                         " argument" + (arity == 1 ? "" : "s") + ", found " +
+                                         std::to_string(expr.args.size()));
+        for (ast::Expr* argument : expr.args) check_expr(argument);
+        return types_.error();
+    }
+
+    bool ok = true;
+    for (ast::Expr* argument : expr.args) {
+        const Type* type = check_expr(argument);
+        if (!type || type->is_error()) {
+            ok = false;
+            continue;
+        }
+        if (type->is_void()) {
+            diagnostics_.error(argument->loc, qualified + " needs a value, found void");
+            ok = false;
+        }
+    }
+    if (!ok) return types_.error();
+
+    const Type* result = types_.bool_type();
+    bytecode::NativeId id = bytecode::NativeId::SameValue;
+    if (is_hash) {
+        result = types_.int32();
+        id = bytecode::NativeId::Hash;
+    } else if (is_describe) {
+        result = types_.string_type();
+        id = bytecode::NativeId::Describe;
+    }
+    info.method = erased_native(member_name, id, result, arity);
+    return result;
+}
+
 const Type* Checker::check_index(ast::IndexExpr& expr) {
+    ExprInfo& info = info_for(expr);
     const Type* object = check_expr(expr.object);
-    const Type* index = check_expr(expr.index);
+    const Type* index = check_expr(expr.index, types_.int32());
 
     if (index && !index->is_integer() && !index->is_error()) {
         diagnostics_.error(expr.index->loc,
@@ -730,14 +933,33 @@ const Type* Checker::check_index(ast::IndexExpr& expr) {
     }
     if (!object || object->is_error()) return types_.error();
 
-    if (object->kind == TypeKind::Pointer) return object->pointee ? object->pointee : types_.error();
-    if (object->kind == TypeKind::String) return types_.unsigned_int(8);
+    if (object->kind == TypeKind::Pointer) {
+        if (!object->pointee) return types_.error();
+        // A raw pointer is writable, and nothing bounds-checks it: that is what
+        // makes it raw. The size the runtime does know about a
+        // khuStdMem-allocated buffer is reported by khuStdMem.sizeOf.
+        info.is_lvalue = true;
+        return object->pointee;
+    }
+
+    if (object->kind == TypeKind::String) {
+        // A string is immutable, so this reads and never writes: `is_lvalue`
+        // stays false and an assignment to it is rejected like any other
+        // non-assignable expression.
+        return types_.unsigned_int(8);
+    }
+
     if (object->kind == TypeKind::Array) {
-        diagnostics_
-            .error(expr.loc, "'Array' has no element type, so it cannot be indexed yet")
-            .note(expr.loc, "typed containers arrive with generics (see docs/roadmap.md); use "
-                            "*byte for a raw buffer in the meantime");
-        return types_.error();
+        if (!object->element) {
+            diagnostics_
+                .error(expr.loc, "a bare 'Array' has no element type, so it cannot be indexed")
+                .note(expr.loc, "write the element type -- Array<int32> -- or hold the value in "
+                                "an Array<T> before indexing it");
+            return types_.error();
+        }
+        info.array_element = object->element;
+        info.is_lvalue = true;
+        return object->element;
     }
 
     diagnostics_.error(expr.loc, "type " + object->display() + " cannot be indexed");

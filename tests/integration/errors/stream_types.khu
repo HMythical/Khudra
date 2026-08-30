@@ -1,0 +1,26 @@
+// khuStdErr is the standard error *stream*; khuErrors is the error *values*.
+// They are different things with deliberately different names.
+bring khu::stdlib;
+
+public class StreamTypes {
+    func go() {
+        // A code is not a stream, and a stream does not hold values.
+        io.printLine(khuStdErr.parse());
+        khuErrors.errPrintLine("wrong namespace");
+
+        // The print matrix is a matrix: there is no overload for a class.
+        StreamTypes self = StreamTypes();
+        io.printLine(self);
+
+        // describe is the answer, and it takes a value rather than a type.
+        io.printLine(io.describe(int32));
+
+        // writeBytes wants a raw pointer and a count.
+        io.writeBytes("text", 4);
+
+        // The typed reads take no arguments: they read a line.
+        io.printLine(io.readInt32("12"));
+    }
+
+    func main() { }
+}

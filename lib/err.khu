@@ -1,0 +1,63 @@
+// khuStdErr -- the standard error stream.
+//
+// File descriptor 2, and nothing else. It is deliberately *not* khuErrors:
+//
+//   khuStdErr   an output stream -- where a program writes what went wrong
+//   khuErrors   error values -- how a program hands a failure back to itself
+//
+// A program that reports a bad line of input writes to khuStdErr and carries a
+// `Result` (lib/errors.khu); the two do different jobs and are named apart so
+// that stays visible.
+//
+// The surface mirrors io's output side exactly -- the same rendering, the same
+// shared formatter, the same byte-oriented calls -- pointed at the other
+// stream. That is the point: a message is not written differently because of
+// which stream it is on.
+//
+// The two streams are captured separately by the test harness, and the
+// byte-identical invariant (docs/native.md, section 5) covers both, so a program's
+// stderr matches across the VM, `run --native` and a built binary the same way
+// its stdout does.
+
+public namespace khuStdErr {
+
+    // Writes a value to standard error, with no separator.
+    native func errPrint(string value);
+    native func errPrint(bool value);
+    native func errPrint(int8 value);
+    native func errPrint(int16 value);
+    native func errPrint(int32 value);
+    native func errPrint(int64 value);
+    native func errPrint(uint8 value);
+    native func errPrint(uint16 value);
+    native func errPrint(uint32 value);
+    native func errPrint(uint64 value);
+    native func errPrint(float value);
+    native func errPrint(dfloat value);
+    native func errPrint(Array value);
+
+    // The same, followed by a newline.
+    native func errPrintLine(string value);
+    native func errPrintLine(bool value);
+    native func errPrintLine(int8 value);
+    native func errPrintLine(int16 value);
+    native func errPrintLine(int32 value);
+    native func errPrintLine(int64 value);
+    native func errPrintLine(uint8 value);
+    native func errPrintLine(uint16 value);
+    native func errPrintLine(uint32 value);
+    native func errPrintLine(uint64 value);
+    native func errPrintLine(float value);
+    native func errPrintLine(dfloat value);
+    native func errPrintLine(Array value);
+
+    // Writes `text` verbatim.
+    native func errWriteString(string text);
+
+    // Writes `count` bytes from `source`, with the same caveats io.writeBytes
+    // carries: nothing behind a `*byte` says how long it is.
+    native func errWriteBytes(*byte source, int32 count);
+
+    // Pushes whatever is buffered out to the stream.
+    native func flush();
+}

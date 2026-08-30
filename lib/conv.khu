@@ -1,0 +1,150 @@
+// khuStdConv -- conversion between numbers, text and bool.
+//
+// Separate from khuStdMath.convertTo, which moves a value between *widths* and
+// is a compiler intrinsic. Nothing here changes a number's width; it changes
+// its representation.
+//
+// ## Rendering
+//
+// `toString` produces exactly what `io.print` would have written, because both
+// go through the same formatter (src/vm/format.h). Both float widths render
+// with six significant digits, which is a display format rather than a
+// round-trip one: parsing a rendered `dfloat` recovers the digits that were
+// printed, not the bits that produced them.
+//
+// ## Parsing, and what a failure looks like today
+//
+// A parse takes the whole string or nothing. Whitespace is not skipped, a
+// trailing character is not ignored, base 10 is the only base, and a value
+// outside the requested width is a failure rather than a wrap:
+//
+//     integer  ::= [+-]? digit+
+//     float    ::= [+-]? ( digit+ ( '.' digit* )? | '.' digit+ ) ( [eE] [+-]? digit+ )?
+//
+// **A failed parse answers with a sentinel**, listed per function below, because
+// Khudra has no exceptions and `khuErrors.Result<T>` is not here yet
+// (docs/roadmap.md). Every sentinel is also a value a successful parse can
+// produce, so a program that has to tell the two apart asks `isNumeric` first.
+// These signatures change to `Result<T>` when generics land; the names and the
+// argument types do not.
+//
+// ## Bytes, not characters
+//
+// A Khudra `string` is a byte string and indexing one yields `uint8`, so the
+// character utilities are defined over bytes and over ASCII. A byte above 0x7f
+// -- one byte of a multi-byte UTF-8 code point -- is not a digit, not a letter
+// and not whitespace, and neither `toUpper` nor `toLower` touches it.
+
+public namespace khuStdConv {
+
+    // ---------------------------------------------------------------------
+    // Number to text
+    // ---------------------------------------------------------------------
+
+    // The value as `io.print` would write it.
+    native func toString(int8 value) -> string;
+    native func toString(int16 value) -> string;
+    native func toString(int32 value) -> string;
+    native func toString(int64 value) -> string;
+    native func toString(uint8 value) -> string;
+    native func toString(uint16 value) -> string;
+    native func toString(uint32 value) -> string;
+    native func toString(uint64 value) -> string;
+    native func toString(float value) -> string;
+    native func toString(dfloat value) -> string;
+    native func toString(bool value) -> string;
+
+    // ---------------------------------------------------------------------
+    // Text to number
+    //
+    // One function per width rather than one overloaded name: every one of
+    // them takes a `string`, so there would be nothing for overload
+    // resolution to choose between.
+    // ---------------------------------------------------------------------
+
+    // The value, or -128 when `text` is not int8.
+    native func parseInt8(string text) -> int8;
+
+    // The value, or -32768 when `text` is not int16.
+    native func parseInt16(string text) -> int16;
+
+    // The value, or -2147483648 when `text` is not int32.
+    native func parseInt32(string text) -> int32;
+
+    // The value, or -9223372036854775808 when `text` is not int64.
+    native func parseInt64(string text) -> int64;
+
+    // The value, or 255 when `text` is not uint8. A leading `+` is
+    // accepted; a leading `-` is not, since the type has no negatives.
+    native func parseUInt8(string text) -> uint8;
+
+    // The value, or 65535 when `text` is not uint16. A leading `+` is
+    // accepted; a leading `-` is not, since the type has no negatives.
+    native func parseUInt16(string text) -> uint16;
+
+    // The value, or 4294967295 when `text` is not uint32. A leading `+` is
+    // accepted; a leading `-` is not, since the type has no negatives.
+    native func parseUInt32(string text) -> uint32;
+
+    // The value, or 18446744073709551615 when `text` is not uint64. A leading `+` is
+    // accepted; a leading `-` is not, since the type has no negatives.
+    native func parseUInt64(string text) -> uint64;
+
+    // The value, or a NaN when `text` is not a number. The result is
+    // rounded through 32 bits, the way every other `float` is.
+    native func parseFloat(string text) -> float;
+
+    // The value, or a NaN when `text` is not a number.
+    native func parseDFloat(string text) -> dfloat;
+
+    // Whether `text` would parse as a number at all -- the float grammar,
+    // which the integer grammar is a subset of.
+    native func isNumeric(string text) -> bool;
+
+    // Whether `text` would parse at a specific width, which is the exact
+    // question `isNumeric` cannot answer: "-1" is numeric and is not a uint8,
+    // and "300" is numeric and is not an int8.
+    //
+    // This is what tells a sentinel from a real answer, and it is what
+    // `Parse` (lib/errors.khu) is written over to produce a `Result<T>`.
+    native func canParseInt8(string text) -> bool;
+    native func canParseInt16(string text) -> bool;
+    native func canParseInt32(string text) -> bool;
+    native func canParseInt64(string text) -> bool;
+    native func canParseUInt8(string text) -> bool;
+    native func canParseUInt16(string text) -> bool;
+    native func canParseUInt32(string text) -> bool;
+    native func canParseUInt64(string text) -> bool;
+    native func canParseFloat(string text) -> bool;
+    native func canParseDFloat(string text) -> bool;
+
+    // ---------------------------------------------------------------------
+    // Bytes
+    // ---------------------------------------------------------------------
+
+    // ASCII classification. False for every byte above 0x7f.
+    native func isDigit(uint8 value) -> bool;
+    native func isLetter(uint8 value) -> bool;
+    native func isWhitespace(uint8 value) -> bool;
+
+    // ASCII case folding. Every other byte comes back unchanged.
+    native func toUpper(uint8 value) -> uint8;
+    native func toLower(uint8 value) -> uint8;
+
+    // The one-byte string holding `value`. Indexing a string yields a byte;
+    // this is what puts one back.
+    native func toChar(uint8 value) -> string;
+
+    // ---------------------------------------------------------------------
+    // Bool
+    //
+    // Khudra has no truthiness: a condition must already be a bool, and these
+    // are the explicit steps across that line.
+    // ---------------------------------------------------------------------
+
+    // 1 for true, 0 for false.
+    native func boolToInt(bool value) -> int32;
+
+    // False for 0, true for anything else.
+    native func intToBool(int32 value) -> bool;
+}

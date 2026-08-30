@@ -1,6 +1,7 @@
 // Expression emission.
 #include <string>
 
+#include "bytecode/native.h"
 #include "codegen/emitter.h"
 #include "sema/builtins.h"
 
@@ -42,6 +43,8 @@ Op intrinsic_op(sema::Intrinsic which) {
         case sema::Intrinsic::Multiply: return Op::Mul;
         case sema::Intrinsic::Divide: return Op::Div;
         case sema::Intrinsic::Remainder: return Op::Rem;
+        case sema::Intrinsic::Neg: return Op::Neg;
+        case sema::Intrinsic::ArraySize: return Op::ArrayLen;
         default: break;
     }
     return Op::Nop;
@@ -215,10 +218,7 @@ void Emitter::emit_expr(const ast::Expr* expr) {
         }
 
         case ast::ExprKind::Index:
-            // Indexing needs an element type; `Array` has none until generics
-            // land, and typed buffers are a roadmap item.
-            error(expr->loc, "indexing is not implemented yet (see docs/roadmap.md)");
-            op(Op::LoadNull);
+            emit_index_read(*static_cast<const ast::IndexExpr*>(expr));
             break;
 
         case ast::ExprKind::TypeRef:
@@ -227,6 +227,31 @@ void Emitter::emit_expr(const ast::Expr* expr) {
             op(Op::LoadNull);
             break;
     }
+}
+
+// `a[i]` as a read. An array element is one instruction; a string byte is the
+// same operation `khuStdString.charAt` performs, so it is that native rather
+// than a second implementation of it.
+void Emitter::emit_index_read(const ast::IndexExpr& index) {
+    const sema::Type* object = type_of(index.object);
+    emit_expr(index.object);
+    emit_expr(index.index);
+
+    if (object && object->kind == sema::TypeKind::String) {
+        op_u16_u8(Op::CallNative,
+                  static_cast<std::uint16_t>(bytecode::NativeId::StrCharAt), 2);
+        return;
+    }
+    if (object && object->is_typed_array()) {
+        op(Op::ArrayGet);
+        return;
+    }
+    if (object && object->kind == sema::TypeKind::Pointer) {
+        op_type(Op::PtrGet, tag_of(object->pointee));
+        return;
+    }
+    error(index.loc, "this expression cannot be indexed");
+    op(Op::LoadNull);
 }
 
 void Emitter::emit_expr_discard(const ast::Expr* expr) {
@@ -261,6 +286,25 @@ void Emitter::emit_logical(const ast::BinaryExpr& binary) {
 
 void Emitter::emit_assign(const ast::AssignExpr& assign, bool keep_value) {
     const sema::ExprInfo* target_info = info_of(assign.target);
+
+    // `a[i] = v`. arrayset and ptrset both consume the target, the index and
+    // the value, so leaving the value behind means tucking a copy under all
+    // three first.
+    if (const auto* index = assign.target->as<ast::IndexExpr>()) {
+        const sema::Type* object = type_of(index->object);
+        mark(assign.loc);
+        emit_expr(index->object);
+        emit_expr(index->index);
+        emit_expr(assign.value);
+        if (keep_value) op(Op::DupX2);
+        if (object && object->kind == sema::TypeKind::Pointer) {
+            op_type(Op::PtrSet, tag_of(object->pointee));
+        } else {
+            op(Op::ArraySet);
+        }
+        return;
+    }
+
     if (!target_info || !target_info->var) {
         error(assign.loc, "unresolved assignment target reached code generation");
         if (keep_value) op(Op::LoadNull);
@@ -315,6 +359,18 @@ void Emitter::emit_call(const ast::CallExpr& call, bool discard) {
         return;
     }
 
+    // khuStdCollection.arrayCreate is the only call the checker gives an
+    // element type to; an index expression is not a call.
+    if (info && info->array_element && call.args.size() == 2) {
+        // khuStdCollection.arrayCreate(<type>, count). The type is consumed
+        // here -- it is the element tag arraynew fills the fresh array with --
+        // and only the count is a runtime value.
+        emit_expr(call.args[1]);
+        op_type(Op::ArrayNew, tag_of(info->array_element));
+        if (discard) op(Op::Pop);
+        return;
+    }
+
     if (info && info->convert_target) {
         const ast::Expr* source = call.args.size() == 2 ? call.args[1] : nullptr;
         emit_expr(source);
@@ -359,26 +415,36 @@ void Emitter::emit_call(const ast::CallExpr& call, bool discard) {
     // A private member or a constructor can never be overridden, so it is
     // called directly; everything else goes through the vtable.
     bool direct = method->visibility == ast::Visibility::Private || method->is_constructor();
+    bool leaves_value = method->return_type && !method->return_type->is_void();
     if (direct) {
         op_u16(Op::CallDirect, static_cast<std::uint16_t>(method->method_id));
     } else {
-        op_u16_u8(Op::CallVirtual, static_cast<std::uint16_t>(method->vtable_slot),
-                  static_cast<std::uint8_t>(call.args.size()));
+        op_u16_u8_u8(Op::CallVirtual, static_cast<std::uint16_t>(method->vtable_slot),
+                     static_cast<std::uint8_t>(call.args.size()),
+                     static_cast<std::uint8_t>(leaves_value ? 1 : 0));
     }
 
     if (discard && method->return_type && !method->return_type->is_void()) op(Op::Pop);
 }
 
 void Emitter::emit_intrinsic(const ast::CallExpr& call, sema::MethodSymbol& method) {
-    Op code = intrinsic_op(static_cast<sema::Intrinsic>(method.intrinsic_id));
-    if (code == Op::Nop || call.args.size() != 2) {
+    auto which = static_cast<sema::Intrinsic>(method.intrinsic_id);
+    Op code = intrinsic_op(which);
+    // An intrinsic's operands are its arguments, in order; the only thing that
+    // varies is how many of them there are.
+    if (code == Op::Nop || call.args.size() != sema::intrinsic_arity(which)) {
         error(call.loc, "unsupported intrinsic reached code generation");
         op(Op::LoadNull);
         return;
     }
-    emit_expr(call.args[0]);
-    emit_expr(call.args[1]);
-    op_type(code, tag_of(method.return_type));
+    for (const ast::Expr* argument : call.args) emit_expr(argument);
+    // Arithmetic carries the width it operates at; `arraylen` does not operate
+    // at a width at all, so it carries nothing.
+    if (bytecode::operand_format(code) == bytecode::OperandFormat::Type) {
+        op_type(code, tag_of(method.return_type));
+    } else {
+        op(code);
+    }
 }
 
 }  // namespace khu::codegen

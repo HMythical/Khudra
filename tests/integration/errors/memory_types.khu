@@ -1,0 +1,37 @@
+// A buffer is bytes; an object is an object. khuStdMem is the raw side, and it
+// says so in its types.
+bring khu::stdlib;
+
+public class Node {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setManual();
+    public int32 value = 0;
+}
+
+public class MemoryTypes {
+    func go() {
+        // `free` releases an object; khuStdMem.release releases a buffer.
+        // They are not interchangeable.
+        Node n = Node();
+        khuStdMem.release(n);
+
+        *byte buffer = khuStdMem.alloc(16);
+        free(buffer);
+
+        // A size is an int32, and a fill value is a byte.
+        *byte sized = khuStdMem.alloc("16");
+        khuStdMem.fill(buffer, 300, 4);
+
+        // Two pointer types that are not *byte do not convert.
+        *int32 words = khuStdMem.alloc(16);
+        *int64 wide = words;
+
+        // An Array is not a buffer.
+        Array<int32> counts = khuStdCollection.arrayCreate(int32, 4);
+        khuStdMem.zero(counts, 4);
+
+        // A reference element type has nothing at an address to read.
+        io.printLine(khuStdMem.addressOf(counts));
+    }
+
+    func main() { }
+}

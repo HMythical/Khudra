@@ -1,0 +1,37 @@
+// khuStdTime -- the clock.
+//
+// This is the one part of the standard library whose answers are not
+// reproducible, and it is worth being explicit about what that costs. Every
+// other namespace is deterministic: the same program produces the same bytes on
+// every run and under every backend, which is what the golden tests compare.
+// A program that prints the time cannot have a golden.
+//
+// Nothing else in the standard library reads the clock, so nothing else
+// inherits that. `khuStdRandom` in particular does **not** seed itself from the
+// time: an unseeded program is reproducible on purpose.
+//
+// The tests here assert what is actually true -- that `monotonicNanos` does not
+// go backwards, that `nowString` has the shape it promises -- rather than
+// pinning values that cannot be pinned.
+
+public namespace khuStdTime {
+
+    // Nanoseconds and milliseconds since the Unix epoch, from the system clock.
+    // This clock can be set backwards, so a difference of two readings is not a
+    // reliable duration -- use monotonicNanos for that.
+    native func nowMillis() -> int64;
+    native func nowNanos() -> int64;
+
+    // Nanoseconds from an unspecified origin on a clock that never goes
+    // backwards. Only differences mean anything; the value itself does not.
+    // This is what a program should measure elapsed time with.
+    native func monotonicNanos() -> int64;
+
+    // The current time as ISO 8601 to the second: `2026-08-30T14:03:07Z` in
+    // UTC, or the same without the `Z` in local time. Fixed width, always.
+    native func nowString(bool utc) -> string;
+
+    // Pauses for at least `millis` milliseconds. A value of 0 or less returns
+    // immediately.
+    native func sleep(int64 millis);
+}

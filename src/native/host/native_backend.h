@@ -28,6 +28,10 @@ enum class NativeStatus {
 struct JitCapture {
     // Receives io.* output instead of stdout.
     std::string output;
+    // Receives khuStdErr.* output instead of stderr. Separate from
+    // `runtime_error` because they are separate things: this is what the
+    // program wrote, that is how it died.
+    std::string error_output;
     // Supplies io.readLine instead of stdin.
     std::string input;
     // The trap message, instead of stderr.

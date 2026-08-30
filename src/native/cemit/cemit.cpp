@@ -23,6 +23,7 @@ struct Insn {
     std::uint32_t size = 1;
     std::uint32_t a = 0;
     std::uint32_t b = 0;
+    std::uint32_t c = 0;
     std::int32_t delta = 0;
 };
 
@@ -89,18 +90,12 @@ std::string quoted(const std::string& text) {
     return out;
 }
 
-// How many values a native call leaves behind. Mirrors KhudraVm::call_native:
-// the printing and loader ids push nothing, the rest push one. An id the VM
-// does not know pops its arguments and traps, so it pushes nothing either.
+// How many values a native call leaves behind. The answer comes from the
+// shared table in bytecode/native.h rather than a second list here, so the
+// emitter's abstract stack cannot disagree with what the two backends do. An
+// id no build knows pops its arguments and traps, so it pushes nothing.
 int native_result_count(std::uint32_t native_id) {
-    switch (static_cast<bytecode::NativeId>(native_id)) {
-        case bytecode::NativeId::ReadLine:
-        case bytecode::NativeId::GetType:
-        case bytecode::NativeId::LoadRuntimeType:
-            return 1;
-        default:
-            return 0;
-    }
+    return bytecode::native_result_count(static_cast<bytecode::NativeId>(native_id));
 }
 
 const char* arith_name(Op op) {
@@ -171,7 +166,8 @@ private:
     // `receiver_class` leave a value behind? An unknown receiver falls back to
     // asking every class that has the slot, which is only ambiguous in an image
     // whose chains disagree -- and that one is reported rather than guessed at.
-    bool virtual_result(std::uint16_t slot, int receiver_class, bool& expects_result);
+    bool virtual_result(std::uint16_t slot, int receiver_class, bool declared,
+                        bool& expects_result);
 
     void fail(const std::string& message) {
         if (result_.error.empty()) result_.error = message;
@@ -230,6 +226,12 @@ bool Emitter::decode(const bytecode::MethodEntry& method, std::vector<Insn>& out
                          (static_cast<std::uint32_t>(operands[1]) << 8);
                 insn.b = operands[2];
                 break;
+            case OperandFormat::U16U8U8:
+                insn.a = static_cast<std::uint32_t>(operands[0]) |
+                         (static_cast<std::uint32_t>(operands[1]) << 8);
+                insn.b = operands[2];
+                insn.c = operands[3];
+                break;
             case OperandFormat::I32: {
                 std::uint32_t bits = 0;
                 for (int i = 0; i < 4; ++i) {
@@ -245,41 +247,35 @@ bool Emitter::decode(const bytecode::MethodEntry& method, std::vector<Insn>& out
     return true;
 }
 
-bool Emitter::virtual_result(std::uint16_t slot, int receiver_class, bool& expects_result) {
-    // The receiver's own table is the whole of dynamic dispatch, so when the
-    // class is known the answer is exact: an override keeps its signature, so
-    // every subclass agrees with it.
-    if (receiver_class != kUnknownClass) {
-        const bytecode::ClassEntry* entry =
-            module_.class_at(static_cast<std::int32_t>(receiver_class));
-        if (entry && slot < entry->vtable.size()) {
-            const bytecode::MethodEntry* callee =
-                module_.method_at(static_cast<std::int32_t>(entry->vtable[slot]));
-            if (callee) {
-                expects_result = callee->return_type != TypeTag::Void;
-                return true;
-            }
-        }
-    }
+// Whether an `invokevirtual` leaves a value behind.
+//
+// The instruction says so: the front end knew at the call site, and a slot
+// number on its own does not -- slot 2 is a getter in one inheritance chain and
+// a void method in an unrelated one, and the emitter walks the code with an
+// abstract stack before any receiver exists to ask.
+//
+// The receiver's own table is still consulted when the class is statically
+// known, as a cross-check: an override keeps its signature, so the two answers
+// have to agree, and a disagreement means the image is not what it claims.
+bool Emitter::virtual_result(std::uint16_t slot, int receiver_class, bool declared,
+                             bool& expects_result) {
+    expects_result = declared;
+    if (receiver_class == kUnknownClass) return true;
 
-    bool seen = false;
-    for (std::size_t i = 0; i < module_.classes.size(); ++i) {
-        const bytecode::ClassEntry& entry = module_.classes[i];
-        if (slot >= entry.vtable.size()) continue;
-        const bytecode::MethodEntry* callee =
-            module_.method_at(static_cast<std::int32_t>(entry.vtable[slot]));
-        if (!callee) continue;
-        bool has = callee->return_type != TypeTag::Void;
-        if (seen && has != expects_result) {
-            fail("cannot tell whether the call through vtable slot " + decimal(slot) +
-                 " leaves a value behind: the receiver's class is not statically known and the "
-                 "image's classes disagree about that slot");
-            return false;
-        }
-        expects_result = has;
-        seen = true;
+    const bytecode::ClassEntry* entry =
+        module_.class_at(static_cast<std::int32_t>(receiver_class));
+    if (!entry || slot >= entry->vtable.size()) return true;
+    const bytecode::MethodEntry* callee =
+        module_.method_at(static_cast<std::int32_t>(entry->vtable[slot]));
+    if (!callee) return true;
+
+    bool actual = callee->return_type != TypeTag::Void;
+    if (actual != declared) {
+        fail("invokevirtual through slot " + decimal(slot) + " says it " +
+             (declared ? "leaves a value behind" : "leaves nothing behind") +
+             ", but the receiver's method disagrees");
+        return false;
     }
-    if (!seen) expects_result = false;
     return true;
 }
 
@@ -346,6 +342,18 @@ bool Emitter::step(const bytecode::MethodEntry& method, const Insn& insn, State&
             break;
         }
 
+        case Op::DupX2: {
+            if (!need(3)) return false;
+            int value = pop();
+            int middle = pop();
+            int under = pop();
+            push(value);
+            push(under);
+            push(middle);
+            push(value);
+            break;
+        }
+
         case Op::LoadConst:
         case Op::LoadNull:
         case Op::LoadTrue:
@@ -373,6 +381,49 @@ bool Emitter::step(const bytecode::MethodEntry& method, const Insn& insn, State&
 
         case Op::LoadThis:
             push(static_cast<int>(method.owner_class));
+            break;
+
+        case Op::ArrayNew:
+            if (!need(1)) return false;
+            pop();
+            push(kUnknownClass);
+            break;
+
+        case Op::ArrayLen:
+            if (!need(1)) return false;
+            pop();
+            push(kUnknownClass);
+            break;
+
+        case Op::ArrayGet:
+            if (!need(2)) return false;
+            pop();
+            pop();
+            // The element type is erased, so nothing is known about the class
+            // of a reference read out of an array. A virtual call on one is
+            // dispatched by the host, which re-resolves it anyway.
+            push(kUnknownClass);
+            break;
+
+        case Op::ArraySet:
+            if (!need(3)) return false;
+            pop();
+            pop();
+            pop();
+            break;
+
+        case Op::PtrGet:
+            if (!need(2)) return false;
+            pop();
+            pop();
+            push(kUnknownClass);
+            break;
+
+        case Op::PtrSet:
+            if (!need(3)) return false;
+            pop();
+            pop();
+            pop();
             break;
 
         case Op::GetField: {
@@ -472,7 +523,8 @@ bool Emitter::step(const bytecode::MethodEntry& method, const Insn& insn, State&
             if (!need(static_cast<int>(insn.b) + 1)) return false;
             int receiver = peek(static_cast<int>(insn.b));
             bool expects = false;
-            if (!virtual_result(static_cast<std::uint16_t>(insn.a), receiver, expects)) {
+            if (!virtual_result(static_cast<std::uint16_t>(insn.a), receiver, insn.c != 0,
+                                expects)) {
                 return false;
             }
             virtual_expects = expects ? 1 : 0;
@@ -682,6 +734,12 @@ bool Emitter::emit_method(std::int32_t index, const bytecode::MethodEntry& metho
                      " = t; }");
                 break;
 
+            case Op::DupX2:
+                line("{ KhuValue t = " + stack(depth - 1) + "; " + stack(depth - 1) + " = " +
+                     stack(depth - 2) + "; " + stack(depth - 2) + " = " + stack(depth - 3) +
+                     "; " + stack(depth - 3) + " = t; " + stack(depth) + " = t; }");
+                break;
+
             case Op::LoadConst:
                 if (insn.a >= module_.constants.size()) {
                     fail("constant #" + decimal(insn.a) + " is out of range");
@@ -718,6 +776,44 @@ bool Emitter::emit_method(std::int32_t index, const bytecode::MethodEntry& metho
 
             case Op::LoadThis:
                 line(stack(depth) + " = F.receiver;");
+                break;
+
+            case Op::ArrayNew:
+                publish();
+                line("if (khu_rt_array_new(&F, " + decimal(insn.a) + "u, " +
+                     stack_addr(depth - 1) + ", " + stack_addr(depth - 1) + ")) KHU_UNWIND(&F);");
+                break;
+
+            case Op::ArrayLen:
+                publish();
+                line("if (khu_rt_array_len(&F, " + stack_addr(depth - 1) + ", " +
+                     stack_addr(depth - 1) + ")) KHU_UNWIND(&F);");
+                break;
+
+            case Op::ArrayGet:
+                publish();
+                line("if (khu_rt_array_get(&F, " + stack_addr(depth - 2) + ", " +
+                     stack_addr(depth - 1) + ", " + stack_addr(depth - 2) + ")) KHU_UNWIND(&F);");
+                break;
+
+            case Op::ArraySet:
+                publish();
+                line("if (khu_rt_array_set(&F, " + stack_addr(depth - 3) + ", " +
+                     stack_addr(depth - 2) + ", " + stack_addr(depth - 1) + ")) KHU_UNWIND(&F);");
+                break;
+
+            case Op::PtrGet:
+                publish();
+                line("if (khu_rt_ptr_get(&F, " + stack_addr(depth - 2) + ", " +
+                     stack_addr(depth - 1) + ", " + decimal(insn.a) + "u, " +
+                     stack_addr(depth - 2) + ")) KHU_UNWIND(&F);");
+                break;
+
+            case Op::PtrSet:
+                publish();
+                line("if (khu_rt_ptr_set(&F, " + stack_addr(depth - 3) + ", " +
+                     stack_addr(depth - 2) + ", " + decimal(insn.a) + "u, " +
+                     stack_addr(depth - 1) + ")) KHU_UNWIND(&F);");
                 break;
 
             case Op::GetField:

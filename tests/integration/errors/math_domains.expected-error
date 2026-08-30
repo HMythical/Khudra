@@ -1,0 +1,7 @@
+no declaration of 'khuStdMath.sqrt' matches (int32)
+no declaration of 'khuStdMath.abs' matches (uint16)
+no declaration of 'khuStdMath.signum' matches (uint16)
+no declaration of 'khuStdMath.gcd' matches (dfloat, dfloat)
+no declaration of 'khuStdMath.min' matches (int32, int64)
+no declaration of 'khuStdMath.pi' takes 1 argument
+Khudra has no implicit widening or narrowing

@@ -1,0 +1,4 @@
+namespace 'khuStdConv' has no member 'parseInt'
+cannot convert int32 to int64 in the initializer of 'wide'
+cannot convert int32 to uint8 in argument 1 of call to 'khuStdConv.isLetter'
+a type is not a value here

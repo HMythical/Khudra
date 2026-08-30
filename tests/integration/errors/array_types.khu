@@ -1,0 +1,36 @@
+// Array<T> is checked even though it is erased: the element type is the
+// compiler's business, and it does not let go of it.
+bring khu::stdlib;
+
+public class ArrayTypes {
+    func go() {
+        Array<int32> counts = khuStdCollection.arrayCreate(int32, 4);
+
+        // The element type is the element type.
+        counts[0] = "text";
+        string first = counts[0];
+
+        // An array of one element type is not an array of another.
+        Array<string> names = counts;
+
+        // A bare Array has no element type, so it cannot be indexed.
+        Array bare = counts;
+        io.printLine(bare[0]);
+
+        // An index is an integer.
+        counts[1.5] = 0;
+
+        // arrayCreate needs a type and a count.
+        Array<int32> wrong = khuStdCollection.arrayCreate(counts, 2);
+
+        // A string is immutable, so an element of one is not assignable.
+        string word = "abc";
+        word[0] = 65;
+
+        // Nothing else is indexable.
+        int32 plain = 1;
+        io.printLine(plain[0]);
+    }
+
+    func main() { }
+}

@@ -34,7 +34,9 @@ bool Compiler::load_stdlib() {
     for (std::size_t i = 0; i < sema::stdlib_file_count(); ++i) {
         std::uint32_t file_id = add_buffer(files[i].path, files[i].contents);
         parser::Parser parser(tokenize(file_id), file_id, diagnostics_, arena_);
-        stdlib_units_.push(parser.parse_unit());
+        ast::CompilationUnit* library = parser.parse_unit();
+        if (library) library->is_stdlib = true;
+        stdlib_units_.push(library);
     }
     // A broken standard library is a toolchain bug, not a user error, so it is
     // worth saying so plainly rather than reporting it as part of their file.
@@ -66,7 +68,7 @@ bool Compiler::compile(std::uint32_t file_id, bytecode::Module& out) {
     if (!program || diagnostics_.has_errors()) return false;
 
     codegen::Emitter emitter(*program, diagnostics_);
-    if (!emitter.emit(*unit_, sources_.path(file_id), out)) return false;
+    if (!emitter.emit(*unit_, sources_.path(file_id), out, &sources_)) return false;
     return !diagnostics_.has_errors();
 }
 

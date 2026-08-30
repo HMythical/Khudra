@@ -1,0 +1,61 @@
+// khuStdConv: numbers to text, text to numbers, bytes and bool.
+bring khu::stdlib;
+
+public class Conv {
+    func main() {
+        // toString renders exactly what io.print would have written.
+        io.printLine(khuStdConv.toString(42));
+        io.printLine(khuStdConv.toString(-42));
+        uint64 huge = 18446744073709551615;
+        io.printLine(khuStdConv.toString(huge));
+        io.printLine(khuStdConv.toString(1.5));
+        io.printLine(khuStdConv.toString(true));
+
+        // Integers round-trip.
+        io.printLine(khuStdConv.parseInt32("2147483647"));
+        io.printLine(khuStdConv.parseInt32(khuStdConv.toString(-98765)));
+        io.printLine(khuStdConv.parseInt8("-128"));
+        io.printLine(khuStdConv.parseUInt8("255"));
+        io.printLine(khuStdConv.parseInt64("-9223372036854775808"));
+        io.printLine(khuStdConv.parseUInt64("18446744073709551615"));
+        io.printLine(khuStdConv.parseDFloat("2.0e-3"));
+        io.printLine(khuStdConv.parseFloat("0.5"));
+
+        // A failed parse answers with the width's sentinel.
+        io.printLine(khuStdConv.parseInt32("twelve"));
+        io.printLine(khuStdConv.parseInt32("12x"));
+        io.printLine(khuStdConv.parseInt32(" 12"));
+        io.printLine(khuStdConv.parseInt32(""));
+        io.printLine(khuStdConv.parseInt8("128"));
+        io.printLine(khuStdConv.parseUInt8("-1"));
+        io.printLine(khuStdConv.parseDFloat("nine"));
+
+        // isNumeric is how a sentinel is told from a real answer.
+        io.printLine(khuStdConv.isNumeric("-3.25e7"));
+        io.printLine(khuStdConv.isNumeric("0"));
+        io.printLine(khuStdConv.isNumeric("12 "));
+        io.printLine(khuStdConv.isNumeric(""));
+
+        // Bytes. Reading one out of a string is khuStdString.charAt; here the
+        // bytes are written directly, so this stays a test of the
+        // classification and not of the string surface.
+        uint8 letter = 75;      // 'K'
+        uint8 digit = 55;       // '7'
+        uint8 space = 32;       // ' '
+        uint8 continuation = 233;  // one byte of a multi-byte code point
+        io.printLine(khuStdConv.isLetter(letter));
+        io.printLine(khuStdConv.isDigit(letter));
+        io.printLine(khuStdConv.isDigit(digit));
+        io.printLine(khuStdConv.isWhitespace(space));
+        io.printLine(khuStdConv.isLetter(continuation));
+        io.printLine(khuStdConv.toChar(khuStdConv.toLower(letter)));
+        io.printLine(khuStdConv.toChar(khuStdConv.toUpper(letter)));
+        io.printLine(khuStdConv.toChar(digit));
+
+        // Bool crosses the line explicitly, in both directions.
+        io.printLine(khuStdConv.boolToInt(true));
+        io.printLine(khuStdConv.boolToInt(false));
+        io.printLine(khuStdConv.intToBool(0));
+        io.printLine(khuStdConv.intToBool(-1));
+    }
+}

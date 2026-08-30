@@ -233,6 +233,33 @@ The instruction set is an X-macro so the enum, the name table and the operand de
 
 A new opcode that runs on the VM but not the native backend breaks the byte-identical invariant, so step 5 is not optional.
 
+### Adding a Native
+
+A `native func` in `lib/*.khu` is a declaration with no body. It is bound either to a **bytecode instruction** (an intrinsic) or to a **runtime call** (a native id), and an unbound declaration is a compile error. Adding one means:
+
+1. `lib/<namespace>.khu` — declare the signature. Khudra has no implicit conversion, so an operation that works on several widths is several declarations; overload resolution picks between them by operand type.
+2. `src/lib/bytecode/native.h` — add an entry to the `KHU_NATIVES` X-macro: name, id, qualified name, result count (0 or 1). Take the next free number **inside your namespace's reserved block**, listed at the top of that file. Ids are frozen: a `.kbc` image records the number, so a shipped id is never changed and never reused.
+3. `src/lib/sema/builtins.cpp` — bind `(namespace, member, arity)` to the id in that namespace's `bind_*` function.
+4. `src/vm/natives.cpp` — implement it, **once**, in `invoke_native`. Both backends call this; there is no second implementation to keep in step. Anything the native needs from the backend it is running under — output, input, a place to put a string it produced — comes through `NativeServices`.
+5. Numbers in and out go through `src/vm/format.h`, and a string the native produces goes through `NativeServices::make_string` (`src/vm/runtime_strings.h`). Rendering a number by hand is how the two backends start to disagree.
+6. `docs/spec.md` §9.1 and the namespace's doc comment in `lib/` — document what it does, including the failure behaviour.
+7. Tests — a golden under `tests/integration/stdlib/`, and an expected-failure case under `tests/integration/errors/` when it has one.
+
+The result count in step 2 is not bookkeeping: the C emitter reads it to know the instruction's stack effect (`src/native/cemit/cemit.cpp`), and `tests/unit/test_natives.cpp` checks it against the declared return type. A native declared to return a value that leaves nothing behind desynchronises the emitted frame.
+
+Overload resolution happens in the checker, but the *binding* is by name and arity only, so every overload of `khuStdConv.toString` shares one id and dispatches on the argument's runtime tag. Two operations that cannot share a runtime dispatch need two names — which is why the per-width parse functions are `parseInt32`, `parseInt64` and so on rather than one overloaded `parseInt`.
+
+A handful of natives cannot be *declared* at all, because their signature is not writable in Khudra. Those are recognized by the checker instead, in `check_call`, and each one is documented in its namespace's `lib/` file beside the declarations:
+
+| Native | Why it cannot be declared |
+|---|---|
+| `khuStdMath.convertTo` | its first argument is a type |
+| `khuStdCollection.arrayCreate` | its first argument is a type |
+| `khuStdCollection.hash` / `.sameValue` | their argument is a value of *any* type |
+| `io.describe` | the same |
+
+Adding one to that list should be a last resort: a declared signature is what gives overload resolution, arity checking and error messages for free.
+
 ### Testing Requirements
 
 Every behavioural change needs a test that would fail without it.
@@ -241,6 +268,8 @@ Every behavioural change needs a test that would fail without it.
 |---|---|---|
 | Unit | `tests/unit/*.cpp` | Registered with `KHU_TEST(suite, name)`; globbed automatically |
 | Golden | `tests/integration/<name>.khu` + `<name>.expected` | A program's exact stdout; registered automatically |
+| Stdlib golden | `tests/integration/stdlib/<name>.khu` + `<name>.expected` | The same, for the standard library's per-namespace programs |
+| Golden stderr | `<name>.expected-err` beside either of the above | The program's exact stderr, compared when the file exists |
 | Expected failure | `tests/integration/errors/<name>.khu` + `<name>.expected-error` | A program that must be rejected, and the wording that must appear |
 | Example | `examples/<name>.khu` + `tests/integration/examples/<name>.expected` | Readable sample programs, checked and run |
 

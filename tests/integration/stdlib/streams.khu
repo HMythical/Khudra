@@ -1,0 +1,50 @@
+// io and khuStdErr: two streams, one surface.
+bring khu::stdlib;
+
+public class Point {
+    public int32 x = 0;
+    public Point(int32 value) { this.x = value; }
+}
+
+public class Streams {
+    func main() {
+        // Standard output.
+        io.print("out: ");
+        io.print(1);
+        io.print(" ");
+        io.print(true);
+        io.printLine("");
+        io.writeString("written verbatim\n");
+
+        // describe renders what print has no overload for.
+        Point p = Point(3);
+        io.printLine(io.describe(p));
+        Array<int32> counts = khuStdCollection.arrayCreate(int32, 4);
+        io.printLine(io.describe(counts));
+        io.printLine(io.describe(42));
+        io.printLine(io.describe("text"));
+        io.printLine(io.describe(null));
+
+        // An Array has a print overload of its own.
+        io.printLine(counts);
+        io.print(counts);
+        io.printLine("");
+
+        // Standard error is a different stream with the same surface.
+        khuStdErr.errPrint("err: ");
+        khuStdErr.errPrint(2);
+        khuStdErr.errPrint(" ");
+        khuStdErr.errPrint(false);
+        khuStdErr.errPrintLine("");
+        khuStdErr.errWriteString("also written verbatim\n");
+        khuStdErr.errPrintLine(counts);
+        khuStdErr.errPrintLine(1.5);
+
+        // Interleaving is per stream: each keeps its own order.
+        io.printLine("stdout second line");
+        khuStdErr.errPrintLine("stderr second line");
+
+        io.flush();
+        khuStdErr.flush();
+    }
+}
