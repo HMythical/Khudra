@@ -1,14 +1,15 @@
 // khudra -- command line driver.
 //
 //   khudra compile <file.khu>   compile to a .kbc bytecode image
-//   khudra run     <file.khu>   compile in memory and execute
+//   khudra run     <file>       compile in memory and execute
+//   khudra build   <file>       compile to a standalone native executable
 //   khudra check   <file.khu>   parse + typecheck only, no output
 //   khudra emit-bc <file.khu>   write bytecode (alias of compile with -o)
 //   khudra disasm  <file.kbc>   disassemble a bytecode image
 //
-// The subcommands are wired to a shared front end as the phases land; until a
-// stage exists the driver still loads the source and reports a real diagnostic
-// with a file:line so error plumbing is exercised from day one.
+// Two execution paths reach the same image: the bytecode VM (`run`) and the
+// native backend (`run --native`, `build`). Argument parsing lives in
+// cli_options.cpp so the unit tests can drive it.
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -17,9 +18,11 @@
 #include "bytecode/disassembler.h"
 #include "bytecode/module.h"
 #include "bytecode/verifier.h"
+#include "cli_options.h"
 #include "compiler.h"
 #include "diag/diagnostic.h"
 #include "diag/source_manager.h"
+#include "host/native_backend.h"
 #include "lexer/token.h"
 #include "parser/pretty_printer.h"
 #include "util/array.h"
@@ -28,113 +31,8 @@
 
 namespace {
 
-constexpr const char* kVersion = "0.1.0-dev";
-
-enum class Command {
-    None,
-    Compile,
-    Run,
-    Check,
-    EmitBc,
-    Disasm,
-    Help,
-    Version,
-};
-
-struct Options {
-    Command command = Command::None;
-    std::string command_name;
-    std::string input;
-    std::string output;
-    bool dump_tokens = false;
-    bool dump_ast = false;
-};
-
-Command parse_command(std::string_view name) {
-    if (name == "compile") return Command::Compile;
-    if (name == "run") return Command::Run;
-    if (name == "check") return Command::Check;
-    if (name == "emit-bc") return Command::EmitBc;
-    if (name == "disasm") return Command::Disasm;
-    if (name == "help" || name == "--help" || name == "-h") return Command::Help;
-    if (name == "version" || name == "--version" || name == "-V") return Command::Version;
-    return Command::None;
-}
-
-void print_usage(std::FILE* stream) {
-    std::fprintf(stream,
-                 "khudra %s -- the Khudra language toolchain\n"
-                 "\n"
-                 "usage: khudra <command> [options] <file>\n"
-                 "\n"
-                 "commands:\n"
-                 "  compile <file.khu>   compile a source file to bytecode\n"
-                 "  run     <file>       execute a .khu source or a .kbc image\n"
-                 "  check   <file.khu>   parse and typecheck only\n"
-                 "  emit-bc <file.khu>   write a .kbc bytecode image\n"
-                 "  disasm  <file>       disassemble a .khu source or a .kbc image\n"
-                 "  version              print the toolchain version\n"
-                 "  help                 print this message\n"
-                 "\n"
-                 "options:\n"
-                 "  -o <path>            output path\n"
-                 "  --dump-tokens        print the token stream\n"
-                 "  --dump-ast           print the parsed AST\n",
-                 kVersion);
-}
-
-// Returns false when the arguments are malformed; `error` explains why.
-bool parse_arguments(int argc, char** argv, Options& options, std::string& error) {
-    if (argc < 2) {
-        error = "no command given";
-        return false;
-    }
-
-    options.command_name = argv[1];
-    options.command = parse_command(options.command_name);
-    if (options.command == Command::None) {
-        error = "unknown command '" + options.command_name + "'";
-        return false;
-    }
-
-    for (int i = 2; i < argc; ++i) {
-        std::string_view argument = argv[i];
-        if (argument == "-o") {
-            if (i + 1 >= argc) {
-                error = "-o requires a path";
-                return false;
-            }
-            options.output = argv[++i];
-        } else if (argument == "--dump-tokens") {
-            options.dump_tokens = true;
-        } else if (argument == "--dump-ast") {
-            options.dump_ast = true;
-        } else if (!argument.empty() && argument[0] == '-' && argument != "-") {
-            error = "unknown option '" + std::string(argument) + "'";
-            return false;
-        } else if (options.input.empty()) {
-            options.input = std::string(argument);
-        } else {
-            error = "unexpected extra argument '" + std::string(argument) + "'";
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool command_needs_input(Command command) {
-    switch (command) {
-        case Command::Compile:
-        case Command::Run:
-        case Command::Check:
-        case Command::EmitBc:
-        case Command::Disasm:
-            return true;
-        default:
-            return false;
-    }
-}
+using khu::cli::Command;
+using khu::cli::Options;
 
 void dump_tokens(const khu::Compiler& compiler, const khu::util::Array<khu::lexer::Token>& tokens) {
     for (const khu::lexer::Token& token : tokens) {
@@ -143,17 +41,7 @@ void dump_tokens(const khu::Compiler& compiler, const khu::util::Array<khu::lexe
     }
 }
 
-// `khudra compile hello.khu` writes hello.kbc next to the source.
-std::string default_output_path(const std::string& input) {
-    std::size_t dot = input.find_last_of('.');
-    std::size_t slash = input.find_last_of('/');
-    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
-        return input.substr(0, dot) + ".kbc";
-    }
-    return input + ".kbc";
-}
-
-// Executes a loaded image.
+// Executes a loaded image on the bytecode VM.
 int execute(const khu::bytecode::Module& module) {
     khu::vm::Vm vm(module);
     if (!vm.run()) {
@@ -163,10 +51,58 @@ int execute(const khu::bytecode::Module& module) {
     return 0;
 }
 
+// Executes a loaded image through the native backend.
+//
+// A machine with no host compiler falls back to the VM with a notice rather
+// than failing: the toolchain stays usable, and the fallback is printed rather
+// than silent (docs/native.md, section 1).
+int execute_native(const khu::bytecode::Module& module, const Options& options) {
+    int exit_code = 0;
+    std::string error;
+    switch (khu::native::run_jit(module, exit_code, error)) {
+        case khu::native::NativeStatus::Ok:
+            return exit_code;
+        case khu::native::NativeStatus::NoCompiler:
+            std::fprintf(stderr,
+                         "khudra: %s: no host C compiler (cc, clang or gcc) was found, so "
+                         "--native falls back to the bytecode VM\n",
+                         options.input.c_str());
+            return execute(module);
+        case khu::native::NativeStatus::Failed:
+            break;
+    }
+    std::fprintf(stderr, "khudra: %s: %s\n", options.input.c_str(), error.c_str());
+    return 1;
+}
+
+// Writes a standalone native executable.
+int build_native(const khu::bytecode::Module& module, const Options& options) {
+    std::string path =
+        options.output.empty() ? khu::cli::default_binary_path(options.input) : options.output;
+    std::string error;
+    switch (khu::native::build_executable(module, path, options.keep_c, error)) {
+        case khu::native::NativeStatus::Ok:
+            return 0;
+        case khu::native::NativeStatus::NoCompiler:
+            // `build` has no interpreter to fall back to: producing a native
+            // binary is the whole request.
+            std::fprintf(stderr,
+                         "khudra: %s: 'build' needs a host C and C++ compiler (cc/clang and "
+                         "c++/clang++); none was found\n",
+                         options.input.c_str());
+            return 1;
+        case khu::native::NativeStatus::Failed:
+            break;
+    }
+    std::fprintf(stderr, "khudra: %s: %s\n", options.input.c_str(), error.c_str());
+    return 1;
+}
+
 int run_stage(const Options& options) {
-    // A .kbc image is already compiled: `run` and `disasm` take it directly
-    // rather than looking for a source file that may not be there any more.
-    if (options.command == Command::Disasm || options.command == Command::Run) {
+    // A .kbc image is already compiled: `run`, `build` and `disasm` take it
+    // directly rather than looking for a source file that may not be there.
+    if (options.command == Command::Disasm || options.command == Command::Run ||
+        options.command == Command::Build) {
         std::string bytes;
         if (khu::util::read_file(options.input, bytes) == khu::util::FileError::None &&
             bytes.size() >= 4 && std::memcmp(bytes.data(), khu::bytecode::kMagic, 4) == 0) {
@@ -176,7 +112,10 @@ int run_stage(const Options& options) {
                 std::fprintf(stderr, "khudra: %s: %s\n", options.input.c_str(), error.c_str());
                 return 1;
             }
-            if (options.command == Command::Run) return execute(module);
+            if (options.command == Command::Build) return build_native(module, options);
+            if (options.command == Command::Run) {
+                return options.native ? execute_native(module, options) : execute(module);
+            }
             std::string text = khu::bytecode::disassemble(module);
             std::fwrite(text.data(), 1, text.size(), stdout);
             return 0;
@@ -238,8 +177,9 @@ int run_stage(const Options& options) {
 
         case Command::Compile:
         case Command::EmitBc: {
-            std::string path = options.output.empty() ? default_output_path(options.input)
-                                                      : options.output;
+            std::string path = options.output.empty()
+                                   ? khu::cli::default_output_path(options.input)
+                                   : options.output;
             std::string bytes = khu::bytecode::serialize(module);
             if (!khu::util::write_file(path, bytes)) {
                 std::fprintf(stderr, "khudra: cannot write '%s'\n", path.c_str());
@@ -248,8 +188,11 @@ int run_stage(const Options& options) {
             return 0;
         }
 
+        case Command::Build:
+            return build_native(module, options);
+
         case Command::Run:
-            return execute(module);
+            return options.native ? execute_native(module, options) : execute(module);
 
         default:
             break;
@@ -267,27 +210,28 @@ int run_stage(const Options& options) {
 int main(int argc, char** argv) {
     Options options;
     std::string error;
-    if (!parse_arguments(argc, argv, options, error)) {
+    if (!khu::cli::parse_arguments(argc, argv, options, error) ||
+        !khu::cli::validate_options(options, error)) {
         std::fprintf(stderr, "khudra: %s\n\n", error.c_str());
-        print_usage(stderr);
+        khu::cli::print_usage(stderr);
         return 2;
     }
 
     switch (options.command) {
         case Command::Help:
-            print_usage(stdout);
+            khu::cli::print_usage(stdout);
             return 0;
         case Command::Version:
-            std::printf("khudra %s\n", kVersion);
+            std::printf("khudra %s\n", khu::cli::kVersion);
             return 0;
         default:
             break;
     }
 
-    if (command_needs_input(options.command) && options.input.empty()) {
+    if (khu::cli::command_needs_input(options.command) && options.input.empty()) {
         std::fprintf(stderr, "khudra: '%s' requires an input file\n\n",
                      options.command_name.c_str());
-        print_usage(stderr);
+        khu::cli::print_usage(stderr);
         return 2;
     }
 

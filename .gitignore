@@ -14,6 +14,8 @@ build/Testing/
 build/generated/
 build/khudra
 build/khudra[._]*
+# Binaries the native build-and-run tests write.
+build/native-tests/
 
 
 # Compiled objects and binaries
@@ -28,6 +30,10 @@ build/khudra[._]*
 
 # Khudra bytecode
 *.kbc
+
+# Working plans/prompts should not reach the main repo (case-insensitive)
+*[pP][lL][aA][nN]*
+*[pP][rR][oO][mM][pP][tT]*
 
 # Editor scratch files
 *.swp

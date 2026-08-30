@@ -150,7 +150,9 @@ local within one block.
 A **mark-sweep** collector (`src/vm/gc/collector.cpp`):
 
 - **Roots** = the VM value stack, every live frame's receiver and locals, the
-  values a native frame is holding, and every live manual object (4.1).
+  values a native frame is holding, and every live manual object (4.1). Under
+  native execution the frames are the compiled ones and the rest is the same
+  (5.2).
 - **Mark** traces precisely through reference maps, following `MANAGED_REF`
   slots only. A `MANUAL_REF` is pinned rather than traced, and a `RAW` slot is
   never a pointer -- so the collector never has to guess.
@@ -168,6 +170,24 @@ VM's own C++ frame, where the interpreter's value stack cannot see them -- and a
 Those values are pushed onto a small **native root** array for the duration, so
 an object is never collected between being allocated and being returned to its
 allocation site.
+
+### 5.2 Roots under native execution
+
+The collector is the same one when a program runs through the native backend
+(`khudra run --native`, `khudra build`) -- what changes is where the roots come
+from, because there is no interpreter frame to walk.
+
+Compiled code may only collect at a **safepoint**: an allocation site or a call
+boundary. Every reference that has to survive one lives in that function's
+**scanned-locals region** -- one array holding the frame's locals and its
+operand stack -- rather than scattered across machine registers. Immediately
+before crossing a safepoint the emitted code publishes how much of that region
+is live, so the scan stays precise: a dead operand in a higher slot does not
+keep an object alive.
+
+The rest is unchanged. Manual objects are still roots, reference maps still
+decide what is traced, and pinning still happens in the host's write barrier
+rather than in emitted code. See [`native.md`](native.md), section 4.
 
 ## 6. Manual arenas
 

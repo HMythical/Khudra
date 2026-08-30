@@ -65,12 +65,35 @@ khudra run     file.kbc      execute a compiled image
 
 `--dump-tokens` and `--dump-ast` print the intermediate forms.
 
+### Native execution
+
+The same program can run without an interpreter at all. `--native` compiles the
+image to native code and runs it against raw memory; `build` writes a
+standalone executable that needs neither `khudra` nor a VM to run.
+
+```
+khudra run --native file.khu      compile to native code and run it in process
+khudra build file.khu -o prog     write a standalone native executable
+khudra build file.kbc             a compiled image works too
+khudra build file.khu --keep-c    keep the intermediate C beside the binary
+```
+
+Both need a host C compiler. `run --native` falls back to the bytecode VM with
+a printed notice when there is none; `build` reports it, since producing a
+native binary is the whole request.
+
+Output does not depend on which path you take: stdout, stderr and exit codes are
+byte-identical across the VM and both native modes, and `ctest` checks that for
+every program in `examples/` and `tests/integration/`. See
+[`docs/native.md`](docs/native.md).
+
 ## Layout
 
 | Path | What is there |
 |---|---|
 | `src/lib/` | the compiler: diagnostics, lexer, parser, sema, codegen, bytecode |
 | `src/vm/` | the VM: interpreter, object model, collector, manual arenas |
+| `src/native/` | the native backend: the C emitter and the host it runs against |
 | `utils/` | the C runtime: the Procedure engine, manual allocation, bool support |
 | `lib/` | the standard library, written in Khudra and embedded in the binary |
 | `examples/` | sample programs |
@@ -84,3 +107,4 @@ khudra run     file.kbc      execute a compiled image
 - [`docs/memory-model.md`](docs/memory-model.md) -- strategies, pinning, the collector
 - [`docs/procedures.md`](docs/procedures.md) -- the materialization pipeline
 - [`docs/bytecode.md`](docs/bytecode.md) -- the instruction set and the `.kbc` format
+- [`docs/native.md`](docs/native.md) -- the native backend: `--native`, `build`, safepoints

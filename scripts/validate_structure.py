@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""Validate that required paths from KHU-PLAN.md (Project layout) exist."""
+"""Validate that the project layout's required paths exist."""
 
 import sys
 from pathlib import Path
 
 REQUIRED_PATHS = [
     "CMakeLists.txt",
-    "KHU-PLAN.md",
     "README.md",
+    # The contributor process: the guide and the template it points at.
+    "CONTRIBUTING.md",
+    ".github/pull_request_template.md",
     "example.khu",
-    # The documents KHU-PLAN.md lists under docs/.
+    # The documents that describe the language and the implementation, in the
+    # order they build on each other, then the user-facing and forward-looking
+    # ones. Every file in docs/ is listed here on purpose: the point of this
+    # check is that deleting one fails CI, which a glob would not do.
     "docs/spec.md",
     "docs/memory-model.md",
     "docs/procedures.md",
     "docs/bytecode.md",
+    "docs/native.md",
+    "docs/installation.md",
     "docs/roadmap.md",
     "src/main",
     "src/lib/diag",

@@ -2,27 +2,12 @@ name: CI - Linux
 
 on:
   push:
-    branches: [ dev ]
-    paths:
-      - 'src/**'
-      - 'utils/**'
-      - 'lib/**'
-      - 'tests/**'
-      - 'examples/**'
-      - 'scripts/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/ci-linux.yml'
+    # main is the deploy branch and dev is where the work lands, so both gate on
+    # a green build. No path filter: a required status check that never runs
+    # leaves a pull request waiting on it forever, and the whole run is seconds.
+    branches: [ main, dev ]
   pull_request:
-    branches: [ dev ]
-    paths:
-      - 'src/**'
-      - 'utils/**'
-      - 'lib/**'
-      - 'tests/**'
-      - 'examples/**'
-      - 'scripts/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/ci-linux.yml'
+    branches: [ main, dev ]
 
 jobs:
   build:

@@ -10,25 +10,52 @@ Nothing here is scheduled. It is a map of the deliberate gaps.
 
 ## Backend
 
-### Register-based VM, or a JIT
+### Native execution -- shipped
 
-**Seam:** `src/vm/vm.cpp`'s interpreter loop.
+**Seam:** `src/vm/vm.cpp`'s interpreter loop. It was the right seam.
 
-The bytecode and the object model do not depend on the loop being a stack
-machine. A register VM or a JIT would replace `Vm::execute` and keep:
+Khudra now has a second execution path. `khudra run --native` and
+`khudra build` compile the `.kbc` image to native code and run it against raw
+memory with no dispatch loop, and the interpreter is untouched. See
+[`native.md`](native.md) for the design.
+
+What the backend kept, exactly as this section predicted it would:
 
 - the `.kbc` container and its class table, reference maps and vtables,
 - `src/vm/object.h` -- the header, field slots and `gc_link`,
-- `src/vm/gc/` and `src/vm/manual/`,
-- the Procedure engine, which reaches the VM only through `KhuProcHostApi`.
+- `src/vm/gc/` and `src/vm/manual/`, shared rather than reimplemented
+  (`khu_vm_core` was split out of `khu_vm` so a native binary can link the
+  memory systems without the interpreter),
+- the Procedure engine, reached through `KhuProcHostApi` and still the single
+  driver of the materialization pipeline,
+- the per-method line table, which is what lets a native trap report the same
+  source position the VM reports.
 
-The one thing a new backend must preserve is the **order** in
-`docs/procedures.md`: allocate, link, bind, Procedures, constructor, register.
-That order is the language's promise, and it lives in C precisely so a new
-backend inherits it instead of reimplementing it.
+The order in `docs/procedures.md` -- allocate, link, bind, Procedures,
+constructor, register -- is preserved because the emitted code calls
+`khu_proc_materialize` rather than doing the work itself.
 
-Bytecode already carries a per-method line table, so a JIT can keep source
-positions for traps without new format work.
+### A direct machine-code emitter
+
+**Seam:** `src/native/cemit/`.
+
+The native backend reaches machine code by transpiling to C and calling the
+host compiler. A direct x86-64 or ARM64 emitter would replace that one pass and
+keep everything around it: the CLI surface (`--native`, `build`), the host, the
+safepoint and scanned-locals scheme, and the differential test suite that
+already proves a backend agrees with the interpreter.
+
+The obvious cost it would remove is the host-compiler requirement, and with it
+the fallback-to-the-VM path in `khudra run --native`.
+
+### Register-based VM
+
+**Seam:** `Vm::execute`.
+
+Still open, and now less pressing: the reason to want one was speed, and the
+native backend is the answer to that. A register VM would still be the better
+*interpreter* -- fewer dispatches per operation for the same image -- and
+nothing about the native work forecloses it.
 
 ---
 
