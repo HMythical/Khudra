@@ -67,7 +67,14 @@ public namespace khuStdString {
     // Building
     //
     // Khudra has no varargs, so `concat` is a handful of arities rather than
-    // one signature. They all do the same thing.
+    // one signature. They all do the same thing: the implementation walks
+    // whatever it was given, so the ceiling is a matter of how many
+    // declarations are written here and nothing else.
+    //
+    // Sixteen is the ceiling because building one HTTP response header needs
+    // about a dozen pieces, and chaining `concat(concat(...))` to get there
+    // reads far worse than it should. Past sixteen, `khuStdCollection.join`
+    // over a `List<string>` is the right shape.
     // ---------------------------------------------------------------------
 
     native func concat(string a, string b) -> string;
@@ -75,6 +82,16 @@ public namespace khuStdString {
     native func concat(string a, string b, string c, string d) -> string;
     native func concat(string a, string b, string c, string d, string e) -> string;
     native func concat(string a, string b, string c, string d, string e, string f) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j, string k) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j, string k, string l) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j, string k, string l, string m) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j, string k, string l, string m, string n) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j, string k, string l, string m, string n, string o) -> string;
+    native func concat(string a, string b, string c, string d, string e, string f, string g, string h, string i, string j, string k, string l, string m, string n, string o, string p) -> string;
 
     // `text` repeated `count` times. A `count` of 0 or less gives the empty
     // string. A result longer than an int32 can count is a runtime error,

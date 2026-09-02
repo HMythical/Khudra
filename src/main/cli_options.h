@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace khu::cli {
 
@@ -37,6 +38,10 @@ struct Options {
     bool native = false;
     // `build --keep-c`: leave the intermediate translation unit on disk.
     bool keep_c = false;
+    // Everything after a `--`: the *program's* arguments, not khudra's.
+    // `khuStdSystem.argc()`/`argv()` answer with these, and the separator is
+    // what keeps a program's `--native` from being read as khudra's.
+    std::vector<std::string> program_args;
 };
 
 Command parse_command(std::string_view name);

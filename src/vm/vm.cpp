@@ -415,6 +415,39 @@ std::string Vm::Services::read_line() {
 
 std::string Vm::Services::render(const Value& value) const { return vm_.render_value(value); }
 
+// --- producing a Khudra object from a native -------------------------------
+//
+// These four are the interpreter's half of the capability EXPANSION-PLAN.md
+// section 4 adds: a native that answers a `List<string>` runs exactly the
+// pipeline `List()` in Khudra source would, so `khuStdSystem.argv()` cannot
+// build something the language itself could not.
+
+bool Vm::Services::materialize(std::string_view class_name, Value& out) {
+    std::int32_t class_id = vm_.class_id_of(class_name);
+    if (class_id < 0) return false;
+    return vm_.materialize(static_cast<std::uint32_t>(class_id),
+                           bytecode::StrategyByte::ClassDefault, out);
+}
+
+bool Vm::Services::invoke(const Value& receiver, std::string_view method_name, const Value* args,
+                          std::uint32_t argc, Value& out) {
+    if (receiver.tag != TypeTag::Ref || !receiver.as_ref) return false;
+    auto* type = static_cast<RuntimeClass*>(receiver.as_ref->header.vtable);
+    if (!type) return false;
+    std::int32_t index = vm_.method_index_of(*type, method_name, argc);
+    if (index < 0) return false;
+    // call_method takes its arguments off the operand stack, the way every
+    // other call does -- there is no second calling convention here.
+    for (std::uint32_t i = 0; i < argc; ++i) vm_.push(args[i]);
+    return vm_.call_method(index, receiver, out);
+}
+
+void Vm::Services::push_root(const Value& value) { vm_.native_roots_.push(value); }
+
+void Vm::Services::pop_root() {
+    if (!vm_.native_roots_.empty()) vm_.native_roots_.pop();
+}
+
 bool Vm::call_native(std::uint32_t native_id, std::uint8_t argc) {
     auto id = static_cast<bytecode::NativeId>(native_id);
 
@@ -426,8 +459,31 @@ bool Vm::call_native(std::uint32_t native_id, std::uint8_t argc) {
 
     NativeOutcome outcome = invoke_native(services_, id, arguments.data(), argc);
     if (!outcome.ok) return trap(std::move(outcome.trap));
+    // `khuStdSystem.exit` leaves through the same door a trap does: the frames
+    // unwind and run() answers false. What is different is that error_ stays
+    // empty, so the driver reports the program's own code rather than a fault.
+    if (services_.system.exit_requested) return false;
     if (bytecode::native_result_count(id) > 0) push(outcome.value);
     return true;
+}
+
+std::int32_t Vm::class_id_of(std::string_view name) const {
+    for (std::size_t i = 0; i < classes_.size(); ++i) {
+        const RuntimeClass* type = classes_.at(static_cast<std::uint32_t>(i));
+        if (type && type->name == name) return static_cast<std::int32_t>(i);
+    }
+    return -1;
+}
+
+std::int32_t Vm::method_index_of(const RuntimeClass& type, std::string_view name,
+                                 std::uint32_t argc) const {
+    for (std::size_t slot = 0; slot < type.vtable.size(); ++slot) {
+        const bytecode::MethodEntry* method = type.vtable[slot];
+        if (!method || method->param_count != argc) continue;
+        if (module_.string_at(method->name) != name) continue;
+        return type.vtable_indices[slot];
+    }
+    return -1;
 }
 
 // The three checks every array instruction makes, so their trap text is
@@ -1135,6 +1191,9 @@ bool Vm::materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Va
     KhuProcStatus status = khu_proc_materialize(class_id, engine_strategy,
                                                 type->materialize_argc, &created);
     if (status != KHU_PROC_OK) {
+        // A program that asked to exit part-way through a materialization is
+        // not a failed materialization: it unwinds, and the exit code stands.
+        if (exit_requested()) return false;
         // The engine reports the depth guard itself, and every step traps on
         // its own failure; only an unreported status needs a message here.
         if (!has_error()) {

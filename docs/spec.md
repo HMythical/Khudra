@@ -353,10 +353,11 @@ they do for user code.
 | `khuStdMath` | arithmetic, utilities, transcendentals, constants -- see below |
 | `khuStdConv` | number/text/bool conversion: `toString`, the per-width `parse*`, `isNumeric`, the byte utilities, `boolToInt` / `intToBool` |
 | `khuStdString` | the whole string surface: size, access, building, searching, comparing, deriving |
-| `khuStdCollection` | `arrayCreate` (an intrinsic), `arraySize`, `hash`, `sameValue` |
+| `khuStdCollection` | `arrayCreate` (an intrinsic), `arraySize`, `hash`, `sameValue`, `join` |
 | `khuStdMem` | manual buffers: `alloc` / `realloc` / `release`, the byte operations, and the leak counters |
 | `khuStdRandom` | a deterministic PRNG |
 | `khuStdTime` | the clock |
+| `khuStdSystem` | the operating system: file handles, the process (`argc` / `argv` / `getEnv` / `exit`), the file namespace, and blocking TCP sockets |
 | `khuErrors` | the error-code table, and `fail` |
 | `io` | standard output and standard input: `print` / `printLine`, `describe`, `writeString` / `writeBytes` / `flush`, `readLine` and the typed reads |
 | `khuStdErr` | standard error (fd 2): the same output surface, other stream |
@@ -568,6 +569,16 @@ broken that were designed not to:
 `khuStdTime` is the exception, and nothing else depends on it. A program that
 prints the time cannot have a golden; a program that does not is unaffected.
 
+`khuStdSystem` sits either side of that line, so it is worth being precise
+about which half is which. Reading and writing a file is **fully
+deterministic** -- C `stdio` behaves identically on Linux and on Windows, and
+`tests/integration/system/` compares the same `.expected` files on both. What is
+*not* deterministic, and never goes in a golden, is `errno()` (a
+platform-specific number), `errorMessage(code)` (platform-specific text), the
+order `envKeys()` answers in, and anything to do with a socket, which picks a
+port and a moment in time. Those live in unit tests, where a platform can be
+asserted about by name.
+
 ### 9.7 Standard-library names
 
 The standard library declares real classes, so their names -- `List`, `Stack`,
@@ -581,6 +592,10 @@ that name at all.
 Namespace names (`io`, `khuStdMath`, `khuErrors`, ...) are not shadowable: there
 is no receiver to tell them apart by, so declaring a class with one of those
 names is an error.
+
+The library's own namespaces resolve names the same way its classes do, which
+matters for a signature like `khuStdSystem.argv() -> List<string>`: that `List`
+is the library's, in a program that declares its own.
 
 `khuErrors` is the namespace beside them: the error-code table
 (`none`, `bounds`, `parse`, `nullReference`, `io`, `divideByZero`, `notFound`,

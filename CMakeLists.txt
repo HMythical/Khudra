@@ -92,6 +92,12 @@ if(KHU_VM_SOURCES)
     target_include_directories(khu_vm_core PUBLIC "${CMAKE_SOURCE_DIR}/src/vm"
                                                    "${CMAKE_SOURCE_DIR}/src")
     target_link_libraries(khu_vm_core PUBLIC khu_frontend khu_runtime_c)
+    if(WIN32)
+        # khuStdSystem's sockets are Winsock here (src/vm/platform.cpp), and
+        # Winsock is not part of the default link on Windows the way the socket
+        # calls are part of libc on Linux.
+        target_link_libraries(khu_vm_core PUBLIC ws2_32)
+    endif()
 
     add_library(khu_vm STATIC ${KHU_VM_INTERPRETER_SOURCES})
     target_link_libraries(khu_vm PUBLIC khu_vm_core)
@@ -167,7 +173,17 @@ target_link_libraries(khudra PRIVATE khu_cli khu_native_driver khu_frontend khu_
                       ${KHU_VM_TARGET})
 # The lowered program is loaded into this process and calls back into it, so the
 # host's khu_rt_* symbols have to be in the executable's dynamic table.
+# ENABLE_EXPORTS is `-rdynamic` on POSIX, where the loaded object leaves those
+# symbols dangling and the loader satisfies them from here.
 set_target_properties(khudra PROPERTIES ENABLE_EXPORTS ON)
+if(WIN32 AND NOT MSVC)
+    # Windows has no dangling-symbol model: the emitted DLL *imports* khu_rt_*,
+    # so this executable has to *export* them. MinGW's --export-all-symbols is
+    # the whole of D3 (EXPANSION-PLAN.md, section 6); no cemit.cpp change is
+    # needed on this path. MSVC would need a generated .def and an import
+    # library instead, which is why it is the deferred D3b sub-phase.
+    target_link_options(khudra PRIVATE "-Wl,--export-all-symbols")
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -260,6 +276,40 @@ file(GLOB KHU_STDLIB_GOLDEN_TESTS CONFIGURE_DEPENDS
 foreach(golden ${KHU_STDLIB_GOLDEN_TESTS})
     khu_add_golden("stdlib_" "${golden}")
 endforeach()
+
+# khuStdSystem. These touch the file system, so they run where they can write:
+# the build directory, which is where ctest puts a test's working directory
+# anyway. Only success paths are golden -- an errno code and an errorMessage
+# string are platform-specific, so neither ever appears in an .expected file
+# (EXPANSION-PLAN.md, section 2.6).
+file(GLOB KHU_SYSTEM_GOLDEN_TESTS CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/tests/integration/system/*.khu")
+
+# `exit_code.khu` is the exception: it exits 7 on purpose, and run_golden.cmake
+# requires a clean exit. The differential harness is the one that fits, because
+# it compares the *exit code* across all three backends -- which is the whole
+# claim khuStdSystem.exit makes.
+set(KHU_SYSTEM_EXIT "${CMAKE_SOURCE_DIR}/tests/integration/system/exit_code.khu")
+list(REMOVE_ITEM KHU_SYSTEM_GOLDEN_TESTS "${KHU_SYSTEM_EXIT}")
+
+foreach(golden ${KHU_SYSTEM_GOLDEN_TESTS})
+    khu_add_golden("system_" "${golden}")
+endforeach()
+
+add_test(
+    NAME differential_system_exit_code
+    COMMAND ${CMAKE_COMMAND}
+        -DKHUDRA=$<TARGET_FILE:khudra>
+        -DSOURCE=${KHU_SYSTEM_EXIT}
+        -DOUTPUT=${KHU_NATIVE_TEST_BIN}/differential_system_exit_code
+        -P ${CMAKE_SOURCE_DIR}/tests/integration/run_differential.cmake)
+
+# The socket half of examples/http_server.khu, which no golden can cover: a
+# real server, driven by a real curl, once per backend. The script exits 0 with
+# a notice when curl is not installed, so a machine without it is not a failure.
+add_test(
+    NAME http_server_over_tcp
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/test_http_server.sh $<TARGET_FILE:khudra>)
 
 # A built binary must be a native program, not a VM carrying one.
 add_test(

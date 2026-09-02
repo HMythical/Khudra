@@ -8,12 +8,13 @@
 // materialization.
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "bytecode/module.h"
 #include "host/khu_native_abi.h"
 #include "host/native_host.h"
 
-int main() {
+int main(int argc, char** argv) {
     std::string bytes(reinterpret_cast<const char*>(khu_native_image),
                       static_cast<std::size_t>(khu_native_image_size));
 
@@ -26,7 +27,15 @@ int main() {
     }
 
     khu::native::NativeHost host(module, khu_native_methods, khu_native_method_count);
+    // A built binary carries its own argv: everything after the program's name
+    // is the program's, with no `--` to strip, because there is no toolchain in
+    // front of it to take arguments of its own.
+    std::vector<std::string> program_args;
+    for (int i = 1; i < argc; ++i) program_args.emplace_back(argv[i]);
+    host.set_program_args(std::move(program_args));
+
     if (!host.run()) {
+        if (host.exit_requested()) return host.exit_code();
         std::fwrite(host.error().data(), 1, host.error().size(), stderr);
         return 1;
     }

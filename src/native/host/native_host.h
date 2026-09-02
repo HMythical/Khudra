@@ -18,6 +18,9 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 extern "C" {
 #include "proc_engine.h"
@@ -66,6 +69,17 @@ public:
 
     bool has_error() const { return !error_.empty(); }
     const std::string& error() const { return error_; }
+
+    // `khuStdSystem.exit(code)`. The mirror of KhudraVm's pair, so a program
+    // that exits with 3 exits with 3 under every backend.
+    bool exit_requested() const { return services_.system.exit_requested; }
+    int exit_code() const { return services_.system.exit_code; }
+
+    // The program's own arguments: everything after `khudra run FILE --`, or a
+    // built binary's own argv past its name.
+    void set_program_args(std::vector<std::string> args) {
+        services_.system.program_args = std::move(args);
+    }
 
     void set_output_sink(std::string* sink) { sink_ = sink; }
     // The standard error stream (fd 2), captured separately from stdout so the
@@ -145,6 +159,11 @@ private:
         std::string read_line() override;
         int read_byte() override;
         std::string render(const Value& value) const override;
+        bool materialize(std::string_view class_name, Value& out) override;
+        bool invoke(const Value& receiver, std::string_view method_name, const Value* args,
+                    std::uint32_t argc, Value& out) override;
+        void push_root(const Value& value) override;
+        void pop_root() override;
 
     private:
         NativeHost& host_;
@@ -158,6 +177,11 @@ private:
     bool call_method_from_stack(std::int32_t method_index, Value receiver, Value& result);
 
     bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
+    // The text-keyed lookups a system native needs to name a class and a method
+    // it has no image index for. The interpreter's are identical.
+    std::int32_t class_id_of(std::string_view name) const;
+    std::int32_t method_index_of(const RuntimeClass& type, std::string_view name,
+                                 std::uint32_t argc) const;
     // The array instructions' shared checks, matching KhudraVm's word for word.
     bool array_operand(const Value& target, Object*& array);
     bool array_index_in_range(const Object& array, std::int64_t index);

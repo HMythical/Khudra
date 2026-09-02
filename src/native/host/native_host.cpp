@@ -508,6 +508,60 @@ std::string NativeHost::Services::render(const Value& value) const {
     return host_.render_value(value);
 }
 
+// --- producing a Khudra object from a native -------------------------------
+//
+// The native backend's half of EXPANSION-PLAN.md section 4, written to match
+// KhudraVm::Services line for line: the same pipeline, the same lookups, the
+// same rooting -- which is what makes `khuStdSystem.argv()` answer the same
+// List under `khudra run` and under `khudra run --native`.
+
+bool NativeHost::Services::materialize(std::string_view class_name, Value& out) {
+    std::int32_t class_id = host_.class_id_of(class_name);
+    if (class_id < 0) return false;
+    return host_.materialize(static_cast<std::uint32_t>(class_id),
+                             bytecode::StrategyByte::ClassDefault, out);
+}
+
+bool NativeHost::Services::invoke(const Value& receiver, std::string_view method_name,
+                                  const Value* args, std::uint32_t argc, Value& out) {
+    if (receiver.tag != TypeTag::Ref || !receiver.as_ref) return false;
+    auto* type = static_cast<RuntimeClass*>(receiver.as_ref->header.vtable);
+    if (!type) return false;
+    std::int32_t index = host_.method_index_of(*type, method_name, argc);
+    if (index < 0) return false;
+    // The lowered function reads its arguments from an array, not a stack, so
+    // this is the `call_method` form rather than `call_method_from_stack`.
+    util::Array<KhuValue> raw;
+    raw.resize(argc);
+    for (std::uint32_t i = 0; i < argc; ++i) raw[i] = from_value(args[i]);
+    return host_.call_method(index, receiver, raw.data(), argc, out);
+}
+
+void NativeHost::Services::push_root(const Value& value) { host_.native_roots_.push(value); }
+
+void NativeHost::Services::pop_root() {
+    if (!host_.native_roots_.empty()) host_.native_roots_.pop();
+}
+
+std::int32_t NativeHost::class_id_of(std::string_view name) const {
+    for (std::size_t i = 0; i < classes_.size(); ++i) {
+        const RuntimeClass* type = classes_.at(static_cast<std::uint32_t>(i));
+        if (type && type->name == name) return static_cast<std::int32_t>(i);
+    }
+    return -1;
+}
+
+std::int32_t NativeHost::method_index_of(const RuntimeClass& type, std::string_view name,
+                                         std::uint32_t argc) const {
+    for (std::size_t slot = 0; slot < type.vtable.size(); ++slot) {
+        const bytecode::MethodEntry* method = type.vtable[slot];
+        if (!method || method->param_count != argc) continue;
+        if (module_.string_at(method->name) != name) continue;
+        return type.vtable_indices[slot];
+    }
+    return -1;
+}
+
 int NativeHost::call_native(KhuFrame* frame, std::uint16_t native_id, std::uint8_t argc,
                             const KhuValue* argv, KhuValue* out, bool expects_result) {
     (void)frame;   // the frame is already linked; trap() walks the chain
@@ -525,6 +579,10 @@ int NativeHost::call_native(KhuFrame* frame, std::uint16_t native_id, std::uint8
         trap(std::move(outcome.trap));
         return 1;
     }
+    // `khuStdSystem.exit` unwinds through the same non-zero return a trap does,
+    // and leaves error_ empty. The lowered code's KHU_UNWIND carries it out to
+    // run(), and the driver reads exit_code() rather than reporting a fault.
+    if (services_.system.exit_requested) return 1;
     if (bytecode::native_result_count(id) > 0) *out = from_value(outcome.value);
     return 0;
 }
@@ -994,6 +1052,8 @@ bool NativeHost::materialize(std::uint32_t class_id, bytecode::StrategyByte stra
     KhuProcStatus status =
         khu_proc_materialize(class_id, engine_strategy, type->materialize_argc, &created);
     if (status != KHU_PROC_OK) {
+        // An exit part-way through a materialization is an exit, not a failure.
+        if (exit_requested()) return false;
         if (!has_error()) {
             return trap("cannot materialize '" + std::string(type->name) + "': " +
                         khu_proc_status_name(status));

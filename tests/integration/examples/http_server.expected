@@ -1,0 +1,53 @@
+HTTP/1.1 200 OK
+Server: khudra/0.1
+Content-Type: text/plain; charset=utf-8
+Content-Length: 40
+Connection: close
+
+hello from khudra/0.1
+try /ping or /env
+
+-----
+HTTP/1.1 200 OK
+Server: khudra/0.1
+Content-Type: text/plain; charset=utf-8
+Content-Length: 5
+Connection: close
+
+pong
+
+-----
+HTTP/1.1 200 OK
+Server: khudra/0.1
+Content-Type: text/plain; charset=utf-8
+Content-Length: 40
+Connection: close
+
+
+-----
+HTTP/1.1 404 Not Found
+Server: khudra/0.1
+Content-Type: text/plain; charset=utf-8
+Content-Length: 23
+Connection: close
+
+no such path: /missing
+
+-----
+HTTP/1.1 405 Method Not Allowed
+Server: khudra/0.1
+Content-Type: text/plain; charset=utf-8
+Content-Length: 32
+Connection: close
+
+only GET and HEAD are supported
+
+-----
+HTTP/1.1 400 Bad Request
+Server: khudra/0.1
+Content-Type: text/plain; charset=utf-8
+Content-Length: 23
+Connection: close
+
+malformed request line
+

@@ -1,0 +1,45 @@
+// khuStdSystem: the file namespace, and the separators a portable program
+// builds paths out of.
+//
+// The separators themselves are *not* printed: they differ per platform, and
+// this .expected file has to pass on both. What is printed is that they are
+// non-empty and that a path built with them behaves -- which is the portable
+// claim actually worth pinning.
+public class SystemPaths {
+    func main() {
+        io.printLine(khuStdString.length(khuStdSystem.pathSeparator()));
+        io.printLine(khuStdString.length(khuStdSystem.pathListSeparator()));
+
+        string root = "khu_system_paths_tmp";
+        io.printLine(khuStdSystem.createDirectory(root));
+        io.printLine(khuStdSystem.exists(root));
+        io.printLine(khuStdSystem.isDirectory(root));
+        io.printLine(khuStdSystem.isFile(root));
+
+        // A path built the portable way, rather than with a hard-coded "/".
+        string inner = khuStdString.concat(root, khuStdSystem.pathSeparator(), "note.txt");
+        *byte file = khuStdSystem.open(inner, "w");
+        khuStdSystem.writeText(file, "kept");
+        khuStdSystem.close(file);
+        io.printLine(khuStdSystem.isFile(inner));
+        io.printLine(khuStdSystem.fileSize(inner));
+
+        string renamed = khuStdString.concat(root, khuStdSystem.pathSeparator(), "moved.txt");
+        io.printLine(khuStdSystem.rename(inner, renamed));
+        io.printLine(khuStdSystem.exists(inner));
+        io.printLine(khuStdSystem.isFile(renamed));
+
+        // The working directory: that it can be read, and that stepping into
+        // the new directory and back leaves it where it started.
+        string before = khuStdSystem.currentDirectory();
+        io.printLine(khuStdString.isEmpty(before));
+        io.printLine(khuStdSystem.changeDirectory(root));
+        io.printLine(khuStdSystem.isFile("moved.txt"));
+        io.printLine(khuStdSystem.changeDirectory(before));
+        io.printLine(khuStdString.equals(khuStdSystem.currentDirectory(), before));
+
+        io.printLine(khuStdSystem.deleteFile(renamed));
+        io.printLine(khuStdSystem.removeDirectory(root));
+        io.printLine(khuStdSystem.exists(root));
+    }
+}

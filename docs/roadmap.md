@@ -129,17 +129,46 @@ Interfaces (below) would give one; so would a special-cased `toString` the
 emitter looks for. Either way, `io.describe` becomes the fallback rather than
 the only answer.
 
-### `khuStdSystem`
+### `khuStdSystem` -- shipped
 
-**Seam:** the entry points -- `khudra run`, `run --native`, and the `main()` a
-built binary carries -- plus a `khu_rt_exit` host call.
+Declared in `lib/system.khu`, implemented in `src/vm/natives.cpp` over the
+platform shim in `src/vm/platform.{h,cpp}`. Files and streams, the process
+(`argc`/`argv`/`getEnv`/`hasEnv`/`envKeys`/`exit`), the file namespace
+(`exists`/`isFile`/`rename`/`createDirectory`/... plus `pathSeparator`), and
+blocking TCP sockets (`listen`/`accept`/`connect`/`send`/`recv`/`shutdown`).
+`examples/http_server.khu` is a real HTTP server over a real socket.
 
-The environment, the command line and process exit are the one part of the
-optional standard library that is not just more natives. Runtime arguments have
-to be threaded from three different `main`s into a place the natives can read,
-and `exit` has to unwind the same way a trap does so a built binary and the VM
-agree about what happens on the way out. `khuStdRandom` and `khuStdTime` needed
-none of that, which is why they landed and this did not.
+The two things this needed that no other namespace did, and that are now
+available to anything else that wants them:
+
+- **A native can produce a Khudra object.** `NativeServices::materialize` and
+  `invoke` run the ordinary materialization pipeline from inside a native, with
+  `RootScope` keeping the result alive across a collection. That is what lets
+  `argv()` answer a real `List<string>`. `listDirectory` and `envKeys`-shaped
+  members ride the same capability.
+- **Exit unwinds like a trap.** `khuStdSystem.exit(code)` comes off the frames
+  the way a fatal error does but sets no error text, and every driver -- the VM,
+  `run --native`, and a built binary's `main` -- reports the code. Program
+  arguments are threaded from those same three entry points.
+
+Still deferred here: threads and non-blocking I/O, UDP/`select`/TLS, process
+spawning and signals, `listDirectory`/`tempFile`/`isTerminal`, the
+`System.getProperty` pack (`osName`/`hostName`/`userName`/...), and `const`
+members in a namespace -- which is what would turn `errno()` from a call into a
+table of constants.
+
+### The Windows native backend -- shipped for MinGW-w64
+
+`khudra run --native` and `khudra build` work on Windows under MinGW-w64 GCC,
+guarded by `.github/workflows/ci-windows.yml`. The three OS-tied parts each
+became one shim: the toolchain (`CreateProcess`, `;`-separated PATH, `%TEMP%`),
+the loader (`LoadLibrary`, a `.dll` rather than a `.so`), and the symbol model
+(`--export-all-symbols` on `khudra.exe`, which the emitted DLL imports from).
+
+**MSVC is deferred.** It does not do exe-imports-from-DLL the MinGW way: it
+needs a generated `.def`, an import library, and `__declspec(dllexport)` on the
+four boundary symbols in `khu_native_abi.h` -- the one place the emission side
+would have to change. Sanitizer parity on Windows is deferred with it.
 
 ### Interfaces
 

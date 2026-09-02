@@ -40,6 +40,8 @@ void print_usage(std::FILE* stream) {
                  "  --keep-c             (build) keep the intermediate C translation unit\n"
                  "  --dump-tokens        print the token stream\n"
                  "  --dump-ast           print the parsed AST\n"
+                 "  -- <args...>         everything after this goes to the program,\n"
+                 "                       where khuStdSystem.argv() reads it\n"
                  "\n"
                  "native execution:\n"
                  "  khudra run --native <file>            compile to C, load, run in process\n"
@@ -65,6 +67,13 @@ bool parse_arguments(int argc, char** argv, Options& options, std::string& error
 
     for (int i = 2; i < argc; ++i) {
         std::string_view argument = argv[i];
+        if (argument == "--") {
+            // Everything past this point belongs to the program being run, not
+            // to khudra. Without the separator a program could never be given
+            // an argument that khudra also spells -- `--native` above all.
+            for (int j = i + 1; j < argc; ++j) options.program_args.emplace_back(argv[j]);
+            break;
+        }
         if (argument == "-o") {
             if (i + 1 >= argc) {
                 error = "-o requires a path";
@@ -105,6 +114,11 @@ bool validate_options(const Options& options, std::string& error) {
     }
     if (options.native && (options.dump_tokens || options.dump_ast)) {
         error = "--native cannot be combined with --dump-tokens or --dump-ast";
+        return false;
+    }
+    if (!options.program_args.empty() && options.command != Command::Run) {
+        error = "arguments after '--' are for the program being run; '" + options.command_name +
+                "' does not run one";
         return false;
     }
     return true;

@@ -156,5 +156,15 @@ public class Collections {
         row.add(5);
         rows.add(row);
         io.printLine(rows.get(0).get(0));
+
+        // join: what a program reaches for once concat runs out of arity.
+        List<string> pieces = List<string>();
+        io.printLine(khuStdString.concat("[", khuStdCollection.join(pieces, ", "), "]"));
+        pieces.add("one");
+        io.printLine(khuStdString.concat("[", khuStdCollection.join(pieces, ", "), "]"));
+        pieces.add("two");
+        pieces.add("three");
+        io.printLine(khuStdCollection.join(pieces, ", "));
+        io.printLine(khuStdCollection.join(pieces, ""));
     }
 }

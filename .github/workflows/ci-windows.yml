@@ -1,0 +1,60 @@
+name: CI - Windows
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  build:
+    name: Build & Test (Windows, MinGW-w64)
+    runs-on: windows-latest
+    # MSYS2's UCRT64 shell, so `gcc`/`g++` on PATH are MinGW-w64's -- which is
+    # the toolchain the native backend targets on Windows (EXPANSION-PLAN.md,
+    # section 6). MSVC is a named deferred sub-phase (D3b): it needs a
+    # generated .def, an import library, and __declspec(dllexport) on the four
+    # boundary symbols, which is exactly why it is not this job.
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # curl is here for scripts/test_http_server.sh: the socket half of
+          # khuStdSystem cannot be proved by a golden, only by a real client.
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            curl
+
+      - name: Configure (Debug)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # The whole suite, because the point of the port is that the *same*
+      # tests pass. The three that matter most are named in the next step:
+      # they are the ones that go through the native backend, which is the
+      # half this job exists to prove.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # Named separately so a failure here is legible as "the native backend
+      # broke on Windows" rather than as one red line in a run of 120.
+      # `differential_*` compares the VM against `run --native` and against a
+      # built binary -- stdout, stderr and exit code -- which is the invariant
+      # the whole backend exists to keep (docs/native.md, section 5).
+      - name: Native backend (differential, golden and build)
+        run: ctest --test-dir build --output-on-failure -R "differential_|golden_native_|build_"
+
+      # Sanitizer parity on Windows is explicitly out of scope for this phase
+      # (EXPANSION-PLAN.md, D6); the Linux workflow carries that job.

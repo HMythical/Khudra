@@ -8,6 +8,9 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 extern "C" {
 #include "proc_engine.h"
@@ -45,6 +48,18 @@ public:
 
     bool has_error() const { return !error_.empty(); }
     const std::string& error() const { return error_; }
+
+    // `khuStdSystem.exit(code)` unwinds the way a trap does, so `run()` answers
+    // false for both. These are what tell them apart: an exit is not an error,
+    // and the code it names is the program's own.
+    bool exit_requested() const { return services_.system.exit_requested; }
+    int exit_code() const { return services_.system.exit_code; }
+
+    // The program's own arguments -- everything after `khudra run FILE --`.
+    // `khuStdSystem.argc()`/`argv()` read these.
+    void set_program_args(std::vector<std::string> args) {
+        services_.system.program_args = std::move(args);
+    }
 
     // Sends io.* output to `sink` instead of stdout. Used by the tests and by
     // `khudra run` when it needs to capture a program's output.
@@ -105,6 +120,11 @@ private:
         std::string read_line() override;
         int read_byte() override;
         std::string render(const Value& value) const override;
+        bool materialize(std::string_view class_name, Value& out) override;
+        bool invoke(const Value& receiver, std::string_view method_name, const Value* args,
+                    std::uint32_t argc, Value& out) override;
+        void push_root(const Value& value) override;
+        void pop_root() override;
 
     private:
         Vm& vm_;
@@ -134,6 +154,13 @@ private:
     // The materialization pipeline (docs/procedures.md). Phase 6 moves the
     // driving loop into the C engine; the steps themselves live here.
     bool materialize(std::uint32_t class_id, bytecode::StrategyByte strategy, Value& out);
+    // Name lookups the system natives need to build an object: a native names a
+    // class and a method in text, because it has no image index to name them
+    // with. Both are linear scans over tables a program has only a few hundred
+    // entries in, and both happen once per `argv()`-shaped call, not in a loop.
+    std::int32_t class_id_of(std::string_view name) const;
+    std::int32_t method_index_of(const RuntimeClass& type, std::string_view name,
+                                 std::uint32_t argc) const;
     // The array instructions' shared checks and their write barrier.
     bool array_operand(const Value& target, Object*& array);
     bool array_index_in_range(const Object& array, std::int64_t index);

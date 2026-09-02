@@ -124,7 +124,7 @@ NativeBinding bind_string(std::string_view member_name, std::size_t arity) {
     // `concat` is the one variadic-looking member: Khudra has no varargs, so it
     // is a handful of fixed arities that all reach the same implementation,
     // which walks its arguments.
-    if (member_name == "concat" && arity >= 2 && arity <= 8) {
+    if (member_name == "concat" && arity >= 2 && arity <= 16) {
         return to_native(Native::StrConcat);
     }
     // `indexOf` takes an optional starting offset, which is a second arity
@@ -176,6 +176,7 @@ NativeBinding bind_collection(std::string_view member_name, std::size_t arity) {
     // declared in Khudra at all and the checker handles it directly, the way it
     // handles khuStdMath.convertTo.
     if (member_name == "arraySize" && arity == 1) return to_intrinsic(Intrinsic::ArraySize);
+    if (member_name == "join" && arity == 2) return to_native(Native::Join);
     // `hash` and `sameValue` are not here either: their argument is a value of
     // any type, which no Khudra signature can say, so the checker recognizes
     // them directly. They still bind to ordinary native ids.
@@ -309,6 +310,81 @@ NativeBinding bind_time(std::string_view member_name, std::size_t arity) {
     return NativeBinding{};
 }
 
+// khuStdSystem. Every member is bound by name and arity like the rest; the two
+// things worth noticing are that `close` and `errno` are shared between the
+// file and socket halves, and that `fileSize` has two declarations -- one over
+// a handle, one over a path -- which, being the same name at the same arity,
+// necessarily reach the same id and are told apart at run time by the tag.
+// khuStdMem.sizeOf is the existing precedent for that.
+NativeBinding bind_system(std::string_view member_name, std::size_t arity) {
+    switch (arity) {
+        case 0:
+            if (member_name == "errno") return to_native(Native::SysErrno);
+            if (member_name == "argc") return to_native(Native::SysArgc);
+            if (member_name == "argv") return to_native(Native::SysArgv);
+            if (member_name == "envKeys") return to_native(Native::SysEnvKeys);
+            if (member_name == "currentDirectory") return to_native(Native::SysCurrentDirectory);
+            if (member_name == "pathSeparator") return to_native(Native::SysPathSeparator);
+            if (member_name == "pathListSeparator") {
+                return to_native(Native::SysPathListSeparator);
+            }
+            break;
+        case 1:
+            // The handle surface.
+            if (member_name == "close") return to_native(Native::SysClose);
+            if (member_name == "isOpen") return to_native(Native::SysIsOpen);
+            if (member_name == "readByte") return to_native(Native::SysReadByte);
+            if (member_name == "readLine") return to_native(Native::SysReadLine);
+            if (member_name == "tell") return to_native(Native::SysTell);
+            if (member_name == "flush") return to_native(Native::SysFlush);
+            if (member_name == "atEof") return to_native(Native::SysAtEof);
+            if (member_name == "error") return to_native(Native::SysError);
+            if (member_name == "clearError") return to_native(Native::SysClearError);
+            if (member_name == "rewind") return to_native(Native::SysRewind);
+            // A handle or a path: one id, two declarations.
+            if (member_name == "fileSize") return to_native(Native::SysFileSize);
+            // The process surface.
+            if (member_name == "getEnv") return to_native(Native::SysGetEnv);
+            if (member_name == "hasEnv") return to_native(Native::SysHasEnv);
+            if (member_name == "exit") return to_native(Native::SysExit);
+            // Paths.
+            if (member_name == "exists") return to_native(Native::SysExists);
+            if (member_name == "isFile") return to_native(Native::SysIsFile);
+            if (member_name == "isDirectory") return to_native(Native::SysIsDirectory);
+            if (member_name == "deleteFile") return to_native(Native::SysDeleteFile);
+            if (member_name == "createDirectory") return to_native(Native::SysCreateDirectory);
+            if (member_name == "removeDirectory") return to_native(Native::SysRemoveDirectory);
+            if (member_name == "changeDirectory") return to_native(Native::SysChangeDirectory);
+            if (member_name == "errorMessage") return to_native(Native::SysErrorMessage);
+            if (member_name == "resolveHost") return to_native(Native::SysResolveHost);
+            // Sockets.
+            if (member_name == "accept") return to_native(Native::SysAccept);
+            if (member_name == "peerAddress") return to_native(Native::SysPeerAddress);
+            if (member_name == "peerPort") return to_native(Native::SysPeerPort);
+            if (member_name == "localPort") return to_native(Native::SysLocalPort);
+            break;
+        case 2:
+            if (member_name == "open") return to_native(Native::SysOpen);
+            if (member_name == "readText") return to_native(Native::SysReadText);
+            if (member_name == "writeText") return to_native(Native::SysWriteText);
+            if (member_name == "rename") return to_native(Native::SysRename);
+            if (member_name == "listen") return to_native(Native::SysListen);
+            if (member_name == "connect") return to_native(Native::SysConnect);
+            if (member_name == "setReadTimeout") return to_native(Native::SysSetReadTimeout);
+            if (member_name == "shutdown") return to_native(Native::SysShutdown);
+            break;
+        case 3:
+            if (member_name == "writeBytes") return to_native(Native::SysWriteBytes);
+            if (member_name == "seek") return to_native(Native::SysSeek);
+            if (member_name == "send") return to_native(Native::SysSend);
+            if (member_name == "recv") return to_native(Native::SysRecv);
+            break;
+        default:
+            break;
+    }
+    return NativeBinding{};
+}
+
 NativeBinding bind_runtime(std::string_view member_name, std::size_t arity) {
     if (arity != 0) return NativeBinding{};
     if (member_name == "stdlibLoadObject") return to_native(Native::StdlibLoadObject);
@@ -329,6 +405,7 @@ NativeBinding resolve_native_binding(std::string_view namespace_name,
     if (namespace_name == kStdErrNamespace) return bind_std_err(member_name, arity);
     if (namespace_name == kRandomNamespace) return bind_random(member_name, arity);
     if (namespace_name == kTimeNamespace) return bind_time(member_name, arity);
+    if (namespace_name == kSystemNamespace) return bind_system(member_name, arity);
     if (namespace_name == kRuntimeNamespace) return bind_runtime(member_name, arity);
     return NativeBinding{};
 }

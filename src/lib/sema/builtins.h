@@ -71,6 +71,10 @@ constexpr const char* kIoNamespace = "io";
 constexpr const char* kStdErrNamespace = "khuStdErr";
 constexpr const char* kRandomNamespace = "khuStdRandom";
 constexpr const char* kTimeNamespace = "khuStdTime";
+// The operating system: open streams, the process, the file namespace and
+// sockets. Distinct from kMemNamespace the way khuStdErr is distinct from
+// khuErrors -- a handle is an OS object, a buffer is bytes.
+constexpr const char* kSystemNamespace = "khuStdSystem";
 
 // The one member whose first argument is a type, so it cannot be declared in
 // Khudra and stays a compiler intrinsic.
@@ -88,6 +92,7 @@ NativeBinding bind_io(std::string_view member_name, std::size_t arity);
 NativeBinding bind_std_err(std::string_view member_name, std::size_t arity);
 NativeBinding bind_random(std::string_view member_name, std::size_t arity);
 NativeBinding bind_time(std::string_view member_name, std::size_t arity);
+NativeBinding bind_system(std::string_view member_name, std::size_t arity);
 NativeBinding bind_runtime(std::string_view member_name, std::size_t arity);
 
 }  // namespace khu::sema

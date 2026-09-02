@@ -28,8 +28,16 @@ if(NOT build_code EQUAL 0)
         "--- stdout ---\n${build_output}")
 endif()
 
+# `khudra build` writes `<output>.exe` on Windows and `<output>` everywhere
+# else, so the artifact to run is whichever of the two is on disk. Resolving it
+# here keeps the harness one script rather than two.
+set(binary "${OUTPUT}")
+if(NOT EXISTS "${binary}" AND EXISTS "${OUTPUT}.exe")
+    set(binary "${OUTPUT}.exe")
+endif()
+
 execute_process(
-    COMMAND "${OUTPUT}"
+    COMMAND "${binary}"
     OUTPUT_VARIABLE actual_output
     ERROR_VARIABLE actual_errors
     RESULT_VARIABLE exit_code

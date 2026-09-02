@@ -1,0 +1,33 @@
+// khuStdSystem: the process surface.
+//
+// A golden runs the program with no `--`, so `argc()` is 0 and `argv()` is an
+// empty `List<string>` -- which is exactly the point worth pinning here, since
+// a native answering a real Khudra object is the one genuinely new runtime
+// capability this library needed (EXPANSION-PLAN.md, section 4). The
+// argument-carrying case is a unit test, where the arguments can be supplied.
+public class SystemProcess {
+    func main() {
+        io.printLine(khuStdSystem.argc());
+
+        List<string> args = khuStdSystem.argv();
+        io.printLine(args.size());
+        io.printLine(args.isEmpty());
+
+        // A List a native built is an ordinary List: it grows, it reads back,
+        // and it is collected like any other.
+        args.add("added");
+        io.printLine(args.size());
+        io.printLine(args.get(0));
+
+        // An environment variable no one sets. "" and false, never a trap --
+        // and the pair is what distinguishes "set to nothing" from "not set".
+        string missing = "KHUDRA_SYSTEM_GOLDEN_UNSET";
+        io.printLine(khuStdSystem.hasEnv(missing));
+        io.printLine(khuStdString.isEmpty(khuStdSystem.getEnv(missing)));
+
+        // Every process has an environment; which names are in it is not
+        // portable, so only that there are some is pinned.
+        List<string> names = khuStdSystem.envKeys();
+        io.printLine(names.size() > 0);
+    }
+}

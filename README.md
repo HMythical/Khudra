@@ -61,9 +61,12 @@ khudra run     file.khu      compile in memory and execute
 khudra compile file.khu      write a .kbc bytecode image
 khudra disasm  file.khu      print a bytecode listing
 khudra run     file.kbc      execute a compiled image
+khudra run     file.khu -- a b c    run it with arguments
 ```
 
-`--dump-tokens` and `--dump-ast` print the intermediate forms.
+`--dump-tokens` and `--dump-ast` print the intermediate forms. Everything after
+a `--` belongs to the program rather than to khudra, and is what
+`khuStdSystem.argv()` answers with.
 
 ### Native execution
 
@@ -82,10 +85,32 @@ Both need a host C compiler. `run --native` falls back to the bytecode VM with
 a printed notice when there is none; `build` reports it, since producing a
 native binary is the whole request.
 
+The native backend runs on POSIX hosts and on Windows under MinGW-w64. MSVC is
+not supported: it needs a different symbol model, which is the one place the
+emitted C would have to change.
+
 Output does not depend on which path you take: stdout, stderr and exit codes are
 byte-identical across the VM and both native modes, and `ctest` checks that for
 every program in `examples/` and `tests/integration/`. See
 [`docs/native.md`](docs/native.md).
+
+### Talking to the system
+
+`khuStdSystem` is the part of the standard library that reaches outside the
+heap: files, the process, the file namespace, and blocking TCP sockets.
+
+```khudra
+*byte listener = khuStdSystem.listen("127.0.0.1", 8080);
+*byte connection = khuStdSystem.accept(listener);
+khuStdSystem.recv(connection, buffer, 2048);
+```
+
+Every member behaves the same way on Linux and on Windows: the file layer is C
+`stdio`, paths are built out of `khuStdSystem.pathSeparator()`, and everything
+platform-shaped lives in one file (`src/vm/platform.cpp`) rather than being
+spread through the natives. `examples/http_server.khu` is a real HTTP server
+that binds its own port; `scripts/test_http_server.sh` drives it with `curl`
+under all three backends.
 
 ## Layout
 

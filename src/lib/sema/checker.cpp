@@ -203,7 +203,17 @@ void Checker::declare_members() {
         declare_class_members(*symbol);
         current_class_ = nullptr;
     }
-    for (ClassSymbol* symbol : program_->namespaces) declare_namespace_members(*symbol);
+    // A namespace's signatures resolve in the scope of the file that declared
+    // them, exactly the way a class's do. That matters for the standard
+    // library's own namespaces: `khuStdSystem.argv() -> List<string>` has to
+    // mean the library's `List` even in a program that declares one of its own,
+    // which is the same rule that keeps the library's `Stack` working
+    // (lookup_class, above).
+    for (ClassSymbol* symbol : program_->namespaces) {
+        current_class_ = symbol;
+        declare_namespace_members(*symbol);
+        current_class_ = nullptr;
+    }
 }
 
 // A namespace holds nothing but `native` declarations: it is a place for the

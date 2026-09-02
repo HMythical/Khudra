@@ -5,7 +5,11 @@
 // (khu_vm_core), the image reader (khu_frontend) and the C runtime -- and no
 // interpreter: khu_vm is deliberately absent, which is what makes a built
 // binary a native program rather than a VM with a program stapled to it.
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -24,6 +28,29 @@ const char* const kArchives[] = {
     "libkhu_frontend.a",   "libkhu_util.a",      "libkhu_runtime_c.a",
 };
 
+// Whether the archive is there to be read. Windows has no execute or read bit
+// to ask about separately, so `_access(path, 0)` -- does it exist -- is the
+// question, and on POSIX R_OK is the same question with an answer about
+// permissions attached.
+bool is_readable(const std::string& path) {
+#if defined(_WIN32)
+    return ::_access(path.c_str(), 0) == 0;
+#else
+    return ::access(path.c_str(), R_OK) == 0;
+#endif
+}
+
+// What an executable is called here. A built binary has to be runnable by
+// double-click and by `cmd`, which on Windows means the extension.
+std::string executable_path(const std::string& output) {
+#if defined(_WIN32)
+    if (output.size() >= 4 && output.compare(output.size() - 4, 4, ".exe") == 0) return output;
+    return output + ".exe";
+#else
+    return output;
+#endif
+}
+
 }  // namespace
 
 NativeStatus build_executable(const bytecode::Module& module, const std::string& output,
@@ -41,7 +68,7 @@ NativeStatus build_executable(const bytecode::Module& module, const std::string&
     std::vector<std::string> archives;
     for (const char* name : kArchives) {
         std::string path = library_dir + "/" + name;
-        if (::access(path.c_str(), R_OK) != 0) {
+        if (!is_readable(path)) {
             error = "the native runtime archive '" + path +
                     "' is missing; set KHUDRA_NATIVE_LIB_DIR to where the toolchain was built";
             return NativeStatus::Failed;
@@ -91,16 +118,22 @@ NativeStatus build_executable(const bytecode::Module& module, const std::string&
 
     // The archives are C++, so the C++ driver does the link and brings its own
     // runtime with it.
+    std::string binary = executable_path(output);
     std::vector<std::string> link{linker};
     append_flags(native_extra_flags(), link);
     link.push_back(object_path);
     for (const std::string& archive : archives) link.push_back(archive);
     link.push_back("-lm");
+#if defined(_WIN32)
+    // The archives carry khuStdSystem's sockets, which are Winsock here. The
+    // link order matters: the library that needs it comes first.
+    link.push_back("-lws2_32");
+#endif
     link.push_back("-o");
-    link.push_back(output);
+    link.push_back(binary);
 
     if (run_tool(link, report) != 0) {
-        error = "the host linker could not build '" + output + "'\n" + report;
+        error = "the host linker could not build '" + binary + "'\n" + report;
         return NativeStatus::Failed;
     }
     return NativeStatus::Ok;

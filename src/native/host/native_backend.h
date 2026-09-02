@@ -9,6 +9,7 @@
 #define KHU_NATIVE_HOST_NATIVE_BACKEND_H
 
 #include <string>
+#include <vector>
 
 #include "bytecode/module.h"
 
@@ -39,10 +40,13 @@ struct JitCapture {
 };
 
 // Lowers, compiles, loads and runs `module` in this process. `exit_code` is
-// what `khudra` should exit with -- 0, or 1 for a trap. Without a `capture` the
-// trap message goes to stderr, the way the driver wants it.
+// what `khudra` should exit with -- 0, 1 for a trap, or whatever
+// `khuStdSystem.exit(code)` asked for. Without a `capture` the trap message
+// goes to stderr, the way the driver wants it. `program_args` is what
+// `khuStdSystem.argv()` answers with: the arguments after `--`.
 NativeStatus run_jit(const bytecode::Module& module, int& exit_code, std::string& error,
-                     JitCapture* capture = nullptr);
+                     JitCapture* capture = nullptr,
+                     const std::vector<std::string>* program_args = nullptr);
 
 // Writes a standalone executable at `output`. `keep_c` leaves the intermediate
 // translation unit beside it as <output>.c.

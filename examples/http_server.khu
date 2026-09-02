@@ -1,0 +1,290 @@
+// A real HTTP server, transport and all, written entirely in Khudra.
+//
+// Until `khuStdSystem` there was no way to own the transport from inside the
+// language: the protocol lived in Khudra and a supervising process owned the
+// socket, piping each request in on stdin. That shim is gone. This program
+// binds the port itself:
+//
+//     listen -> accept -> recv -> parse -> send -> close
+//
+// and every one of those is a `khuStdSystem` call.
+//
+// ## Running it
+//
+//     khudra run examples/http_server.khu -- 8080
+//     khudra run --native examples/http_server.khu -- 8080
+//     khudra build examples/http_server.khu -o http_server && ./http_server 8080
+//
+// then `curl -s http://127.0.0.1:8080/ping`. `scripts/test_http_server.sh`
+// does exactly that, against all three backends.
+//
+// Arguments are `[port] [requests]`. A `port` of 0 asks the system to choose
+// one and the program prints which it got, which is what makes the test script
+// race-free. A `requests` count above 0 serves that many and exits, so the
+// program terminates on its own; 0 or absent serves for ever.
+//
+// ## Blocking, single threaded, on purpose
+//
+// One connection at a time, no threads and no event loop -- those are explicit
+// non-goals of the library. What keeps that honest is `setReadTimeout`: a peer
+// that connects and then says nothing would otherwise wedge the server for
+// ever, and this is the one timeout the surface has.
+bring khu::stdlib;
+
+public class HttpServer {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    public string name = "khudra/0.1";
+
+    public HttpServer() {
+    }
+
+    // ---------------------------------------------------------------------
+    // The transport
+    // ---------------------------------------------------------------------
+
+    // Binds `port` and serves. Answers the exit status: 0 when it served what
+    // it was asked to, 1 when the port could not be bound.
+    func serve(int32 port, int32 requests) -> int32 {
+        *byte listener = khuStdSystem.listen("127.0.0.1", port);
+        if (khuStdMem.isNull(listener)) {
+            khuStdErr.errPrintLine(khuStdString.concat(
+                "cannot listen on port ", khuStdConv.toString(port), ": ",
+                khuStdSystem.errorMessage(khuStdSystem.errno())));
+            return 1;
+        }
+
+        // Printed before the first accept, and flushed, so a supervisor
+        // reading this program's stdout knows the port is open before it
+        // connects. With a requested port of 0 this is the only way to learn
+        // which port the system chose.
+        io.printLine(khuStdString.concat(
+            "listening on 127.0.0.1:",
+            khuStdConv.toString(khuStdSystem.localPort(listener))));
+        io.flush();
+
+        int32 served = 0;
+        while (requests <= 0 || served < requests) {
+            *byte connection = khuStdSystem.accept(listener);
+            if (khuStdMem.isNull(connection)) {
+                khuStdErr.errPrintLine(khuStdString.concat(
+                    "accept failed: ",
+                    khuStdSystem.errorMessage(khuStdSystem.errno())));
+                khuStdSystem.close(listener);
+                return 1;
+            }
+            this.exchange(connection);
+            khuStdSystem.close(connection);
+            served = khuStdMath.add(served, 1);
+        }
+
+        khuStdSystem.close(listener);
+        return 0;
+    }
+
+    // One request in, one response out, connection closed. HTTP/1.0-style: no
+    // keep-alive, which is what `Connection: close` in every response says.
+    func exchange(*byte connection) {
+        // A peer that connects and never speaks must not be able to stop the
+        // server for ever. Five seconds is generous for a request line.
+        khuStdSystem.setReadTimeout(connection, 5000);
+
+        string request = this.receive(connection);
+        if (khuStdString.isEmpty(request)) { return; }
+
+        string response = this.handle(this.firstLine(request));
+        this.transmit(connection, response);
+        // Half-close the writing side: the peer sees the end of the body
+        // without the connection being torn out from under it.
+        khuStdSystem.shutdown(connection, 1);
+    }
+
+    // Reads until the blank line that ends the headers, or until the peer
+    // stops, or until the request is longer than this server will accept.
+    func receive(*byte connection) -> string {
+        *byte buffer = khuStdMem.alloc(2048);
+        string request = "";
+        bool reading = true;
+        while (reading) {
+            int32 got = khuStdSystem.recv(connection, buffer, 2048);
+            if (got <= 0) { reading = false; }
+            else {
+                request = khuStdString.concat(request, this.textOf(buffer, got));
+                if (khuStdString.contains(request, "\r\n\r\n")) { reading = false; }
+                if (khuStdString.contains(request, "\n\n")) { reading = false; }
+                if (khuStdString.length(request) > 8192) { reading = false; }
+            }
+        }
+        khuStdMem.release(buffer);
+        return request;
+    }
+
+    // Writes the whole response, one short write at a time if that is what the
+    // socket gives -- `send` may take fewer bytes than it was offered.
+    func transmit(*byte connection, string response) {
+        int32 total = khuStdString.length(response);
+        *byte buffer = khuStdMem.alloc(khuStdMath.add(total, 1));
+        int32 i = 0;
+        while (i < total) {
+            buffer[i] = khuStdMath.convertTo(uint8, khuStdString.charAt(response, i));
+            i = khuStdMath.add(i, 1);
+        }
+
+        int32 sent = 0;
+        while (sent < total) {
+            int32 wrote = khuStdSystem.send(connection, buffer, khuStdMath.subtract(total, sent));
+            if (wrote <= 0) { sent = total; }
+            else {
+                sent = khuStdMath.add(sent, wrote);
+                // Slide the unsent tail down to the front of the buffer, so
+                // the next `send` starts where this one stopped.
+                if (sent < total) {
+                    int32 j = 0;
+                    while (khuStdMath.add(sent, j) < total) {
+                        buffer[j] = buffer[khuStdMath.add(sent, j)];
+                        j = khuStdMath.add(j, 1);
+                    }
+                }
+            }
+        }
+        khuStdMem.release(buffer);
+    }
+
+    // The bytes a `recv` filled in, as a string.
+    func textOf(*byte buffer, int32 count) -> string {
+        string text = "";
+        int32 i = 0;
+        while (i < count) {
+            text = khuStdString.concat(text, khuStdConv.toChar(buffer[i]));
+            i = khuStdMath.add(i, 1);
+        }
+        return text;
+    }
+
+    // ---------------------------------------------------------------------
+    // The protocol
+    // ---------------------------------------------------------------------
+
+    // Everything before the first newline, without a trailing carriage return.
+    func firstLine(string request) -> string {
+        int32 end = khuStdString.indexOf(request, "\n");
+        if (end < 0) { end = khuStdString.length(request); }
+        string line = khuStdString.substring(request, 0, end);
+        int32 last = khuStdMath.subtract(khuStdString.length(line), 1);
+        if (last >= 0 && khuStdString.charAt(line, last) == 13) {
+            line = khuStdString.substring(line, 0, last);
+        }
+        return line;
+    }
+
+    // The status line, headers and a small text body, as one string ready to
+    // go down the connection. Sixteen-argument `concat` is what lets this be
+    // one call rather than three chained ones.
+    func respond(string status, string body) -> string {
+        return khuStdString.concat(
+            status, "\r\n",
+            "Server: ", this.name, "\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "Content-Length: ", khuStdConv.toString(khuStdString.length(body)), "\r\n",
+            "Connection: close\r\n",
+            "\r\n", body);
+    }
+
+    // Routes one request. A request line is "METHOD SP PATH SP HTTP/1.x".
+    // Anything else is malformed and answered with 400.
+    func handle(string requestLine) -> string {
+        int32 firstSpace = khuStdString.indexOf(requestLine, " ");
+        if (firstSpace < 0) {
+            return this.respond("HTTP/1.1 400 Bad Request",
+                                "malformed request line\n");
+        }
+
+        string word = khuStdString.substring(requestLine, 0, firstSpace);
+        int32 rest = khuStdMath.add(firstSpace, 1);
+        int32 pathEnd = khuStdString.indexOf(requestLine, " ", rest);
+        if (pathEnd < 0) {
+            return this.respond("HTTP/1.1 400 Bad Request",
+                                "malformed request line\n");
+        }
+
+        string path = khuStdString.substring(requestLine, rest, pathEnd);
+
+        if (khuStdString.equals(word, "GET")) {
+            return this.routeGet(path);
+        }
+        if (khuStdString.equals(word, "HEAD")) {
+            return this.headBody(this.routeGet(path));
+        }
+
+        return this.respond("HTTP/1.1 405 Method Not Allowed",
+                            "only GET and HEAD are supported\n");
+    }
+
+    // A GET is routed by path. The root answers a greeting plus the endpoints.
+    func routeGet(string path) -> string {
+        if (khuStdString.equals(path, "/") || khuStdString.equals(path, "")) {
+            return this.respond("HTTP/1.1 200 OK",
+                                khuStdString.concat("hello from ", this.name,
+                                                    "\n", "try /ping or /env\n"));
+        }
+        if (khuStdString.equals(path, "/ping")) {
+            return this.respond("HTTP/1.1 200 OK", "pong\n");
+        }
+        if (khuStdString.equals(path, "/env")) {
+            // Something only a program that can talk to the system can answer.
+            List<string> facts = List<string>();
+            facts.add(khuStdString.concat("separator=", khuStdSystem.pathSeparator()));
+            facts.add(khuStdString.concat("arguments=",
+                                          khuStdConv.toString(khuStdSystem.argc())));
+            return this.respond("HTTP/1.1 200 OK",
+                                khuStdString.concat(
+                                    khuStdCollection.join(facts, "\n"), "\n"));
+        }
+        return this.respond("HTTP/1.1 404 Not Found",
+                            khuStdString.concat("no such path: ", path, "\n"));
+    }
+
+    // HEAD is GET without the body: strip everything after the blank line.
+    func headBody(string response) -> string {
+        int32 blank = khuStdString.indexOf(response, "\r\n\r\n");
+        if (blank < 0) { return response; }
+        return khuStdString.substring(response, 0, khuStdMath.add(blank, 4));
+    }
+
+    // ---------------------------------------------------------------------
+    // Entry
+    // ---------------------------------------------------------------------
+
+    // `[port] [requests]`. With no arguments at all the program prints the
+    // routing table instead of binding anything, so that `khudra run` with no
+    // arguments -- which is what the example suite does -- terminates.
+    func main() {
+        List<string> args = khuStdSystem.argv();
+        if (args.isEmpty()) {
+            this.demonstrate();
+            return;
+        }
+
+        int32 port = khuStdConv.parseInt32(args.get(0));
+        int32 requests = 0;
+        if (args.size() > 1) { requests = khuStdConv.parseInt32(args.get(1)); }
+        khuStdSystem.exit(this.serve(port, requests));
+    }
+
+    // What every route answers, without a socket. This is what the golden
+    // pins: the protocol half is deterministic, and the transport half is what
+    // scripts/test_http_server.sh exercises with a real `curl`.
+    func demonstrate() {
+        io.printLine(this.handle("GET / HTTP/1.1"));
+        io.printLine("-----");
+        io.printLine(this.handle("GET /ping HTTP/1.1"));
+        io.printLine("-----");
+        io.printLine(this.handle("HEAD / HTTP/1.1"));
+        io.printLine("-----");
+        io.printLine(this.handle("GET /missing HTTP/1.1"));
+        io.printLine("-----");
+        io.printLine(this.handle("POST / HTTP/1.1"));
+        io.printLine("-----");
+        io.printLine(this.handle("GET /"));
+    }
+}

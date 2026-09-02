@@ -1,5 +1,6 @@
 #include "vm/natives.h"
 
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <thread>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 extern "C" {
 #include "alloc.h"
@@ -17,6 +19,7 @@ extern "C" {
 #include "bytecode/opcode.h"
 #include "vm/format.h"
 #include "vm/object.h"
+#include "vm/platform.h"
 
 namespace khu::vm {
 
@@ -528,6 +531,116 @@ std::string format_now(bool utc) {
     return scratch;
 }
 
+
+// --- khuStdSystem ----------------------------------------------------------
+//
+// A handle is a `*byte` cookie from the same allocator `khuStdMem.alloc` uses,
+// registered in `SystemServices::handles` against the real OS object. Nothing
+// here dereferences the cookie -- it is a key -- so a handle that has been
+// closed answers "not open" rather than reading freed memory, and the leak
+// accounting a buffer gets applies to a handle unchanged.
+//
+// Everything platform-shaped is behind `vm/platform.h`, so these bodies are
+// written once and are the same program on Linux and on Windows.
+
+// A null `*byte`, which is what every failing constructor here answers.
+Value null_pointer() {
+    Value result;
+    result.tag = TypeTag::Ptr;
+    result.as_raw = nullptr;
+    return result;
+}
+
+Value pointer_value(void* block) {
+    Value result;
+    result.tag = TypeTag::Ptr;
+    result.as_raw = block;
+    return result;
+}
+
+// The open handle `value` names, or null when it names none -- because it is
+// null, because it was closed, or because it is a plain buffer.
+HandleSlot* handle_of(NativeServices& services, const Value& value) {
+    if (value.is_null_reference()) return nullptr;
+    if (value.tag != TypeTag::Ptr || !value.as_raw) return nullptr;
+    return services.system.find(value.as_raw);
+}
+
+// The same, narrowed to a file. A socket has no `seek` and a listener has no
+// `recv`, so the kind is checked rather than assumed.
+std::FILE* file_of(NativeServices& services, const Value& value) {
+    HandleSlot* slot = handle_of(services, value);
+    if (!slot || slot->kind != HandleKind::File) {
+        // EBADF is what a POSIX call answers for a descriptor that is not
+        // open, and it is the closest thing Windows has to the same idea.
+        platform::set_last_error(EBADF);
+        return nullptr;
+    }
+    return reinterpret_cast<std::FILE*>(static_cast<std::uintptr_t>(slot->descriptor));
+}
+
+platform::Socket socket_of(NativeServices& services, const Value& value, bool want_listener) {
+    HandleSlot* slot = handle_of(services, value);
+    HandleKind wanted = want_listener ? HandleKind::Listener : HandleKind::Socket;
+    if (!slot || slot->kind != wanted) {
+        platform::set_last_error(EBADF);
+        return platform::kInvalidSocket;
+    }
+    return static_cast<platform::Socket>(slot->descriptor);
+}
+
+// Either kind of socket. `peerAddress` and `setReadTimeout` do not care which,
+// and neither does `close`.
+platform::Socket any_socket_of(NativeServices& services, const Value& value) {
+    HandleSlot* slot = handle_of(services, value);
+    if (!slot || (slot->kind != HandleKind::Socket && slot->kind != HandleKind::Listener)) {
+        platform::set_last_error(EBADF);
+        return platform::kInvalidSocket;
+    }
+    return static_cast<platform::Socket>(slot->descriptor);
+}
+
+Value int32_of(std::int64_t value) { return Value::make_int(TypeTag::Int32, value); }
+
+// A string argument that must be there. Every path- and name-taking native
+// starts with this, so "you passed null" is one message rather than twenty.
+bool string_argument(const Value& value, std::string& out) {
+    std::string_view text;
+    if (!text_of(value, text)) return false;
+    out.assign(text);
+    return true;
+}
+
+NativeOutcome null_string_trap(bytecode::NativeId id) {
+    return NativeOutcome::failed(std::string(bytecode::native_name(id)) +
+                                 " was given null instead of a string");
+}
+
+// Builds a `List<string>` and fills it, which is the one thing a native could
+// not do before this library: `NativeOutcome` can carry a primitive, a string
+// or a `*T`, but an *instance* has to come out of the backend's own
+// materialization pipeline (EXPANSION-PLAN.md, section 4).
+NativeOutcome string_list(NativeServices& services, bytecode::NativeId id,
+                          const std::vector<std::string>& items) {
+    Value list;
+    if (!services.materialize("List", list)) {
+        return NativeOutcome::failed(std::string(bytecode::native_name(id)) +
+                                     " could not create the List it answers with");
+    }
+    // `List.add` grows a backing array, so it allocates, so it can collect --
+    // and the only thing holding the list at that moment is this C++ local.
+    RootScope rooted(services, list);
+    for (const std::string& item : items) {
+        Value element = Value::make_string(services.make_string(item));
+        Value ignored;
+        if (!services.invoke(list, "add", &element, 1, ignored)) {
+            return NativeOutcome::failed(std::string(bytecode::native_name(id)) +
+                                         " could not fill the List it answers with");
+        }
+    }
+    return NativeOutcome::produced(list);
+}
+
 using Unary = double (*)(double);
 using Binary = double (*)(double, double);
 
@@ -554,6 +667,61 @@ NativeOutcome float_binary(bytecode::NativeId id, const Value* argv, std::uint32
 }
 
 }  // namespace
+
+
+// ---------------------------------------------------------------------------
+// khuStdSystem: the handle registry
+// ---------------------------------------------------------------------------
+
+SystemServices::~SystemServices() { close_all(); }
+
+void* SystemServices::open_handle(HandleKind kind, std::int64_t descriptor) {
+    // The cookie is a real manual block, so an open handle is visible to
+    // `khuStdMem.liveBytes()` and a leaked one is visible to the sanitizer --
+    // which is the whole reason not to invent a private allocator for it.
+    void* cookie = khu_manual_alloc(sizeof(std::int64_t) * 2);
+    if (!cookie) return nullptr;
+    handles.push_back(HandleSlot{cookie, kind, descriptor});
+    return cookie;
+}
+
+HandleSlot* SystemServices::find(const void* cookie) {
+    if (!cookie) return nullptr;
+    for (HandleSlot& slot : handles) {
+        if (slot.cookie == cookie) return &slot;
+    }
+    return nullptr;
+}
+
+void SystemServices::forget(const void* cookie) {
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        if (handles[i].cookie != cookie) continue;
+        handles.erase(handles.begin() + static_cast<std::ptrdiff_t>(i));
+        khu_manual_free(const_cast<void*>(cookie));
+        return;
+    }
+}
+
+void SystemServices::close_all() {
+    // A program that forgets to close is still not allowed to leak an OS
+    // object out of the process, so the end of a run closes what is left.
+    for (HandleSlot& slot : handles) {
+        switch (slot.kind) {
+            case HandleKind::File:
+                std::fclose(
+                    reinterpret_cast<std::FILE*>(static_cast<std::uintptr_t>(slot.descriptor)));
+                break;
+            case HandleKind::Socket:
+            case HandleKind::Listener:
+                platform::socket_close(static_cast<platform::Socket>(slot.descriptor));
+                break;
+            case HandleKind::None:
+                break;
+        }
+        khu_manual_free(const_cast<void*>(slot.cookie));
+    }
+    handles.clear();
+}
 
 NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, const Value* argv,
                             std::uint32_t argc) {
@@ -1176,6 +1344,52 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             services.flush_error();
             return NativeOutcome::nothing();
 
+        case bytecode::NativeId::Join: {
+            std::string_view separator;
+            if (!text_of(argv[1], separator)) {
+                return NativeOutcome::failed(
+                    "cannot join with null: the separator is not instantiated yet");
+            }
+            if (argv[0].is_null_reference()) {
+                return NativeOutcome::failed(
+                    "cannot join null: the list is not instantiated yet");
+            }
+            // The list is read through its own `size()` and `get()`, so this
+            // works for anything shaped like a List and needs to know nothing
+            // about how one is laid out. It is also why the list has to be a
+            // root: a method call is a safepoint, and the only thing holding
+            // the list here is this C++ frame.
+            RootScope rooted(services, argv[0]);
+            Value count;
+            if (!services.invoke(argv[0], "size", nullptr, 0, count)) {
+                return NativeOutcome::failed(
+                    "khuStdCollection.join expects a List, which this value is not");
+            }
+            std::string joined;
+            std::int64_t size = count.as_int;
+            for (std::int64_t i = 0; i < size; ++i) {
+                Value index = Value::make_int(TypeTag::Int32, i);
+                Value element;
+                if (!services.invoke(argv[0], "get", &index, 1, element)) {
+                    return NativeOutcome::failed(
+                        "khuStdCollection.join expects a List, which this value is not");
+                }
+                std::string_view piece;
+                if (!text_of(element, piece)) {
+                    // Generics are erased, so a List that was never a
+                    // List<string> only becomes visible here. Saying so beats
+                    // rendering whatever happened to be in the slot.
+                    return NativeOutcome::failed(
+                        "khuStdCollection.join found something that is not a string at index " +
+                        format::format_int(i));
+                }
+                if (i != 0) joined += separator;
+                joined += piece;
+            }
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(std::move(joined))));
+        }
+
         // --- khuStdMem ----------------------------------------------------
 
         case bytecode::NativeId::MemAlloc: {
@@ -1435,6 +1649,445 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
                 std::this_thread::sleep_for(std::chrono::milliseconds(millis));
             }
             return NativeOutcome::nothing();
+        }
+
+        // --- khuStdSystem: handles ----------------------------------------
+
+        case bytecode::NativeId::SysOpen: {
+            std::string path;
+            std::string mode;
+            if (!string_argument(argv[0], path) || !string_argument(argv[1], mode)) {
+                return null_string_trap(id);
+            }
+            // C's four modes and nothing else. A mode this runtime does not
+            // name would mean something different on the two platforms, which
+            // is exactly what this library promises will not happen.
+            if (mode != "r" && mode != "w" && mode != "a" && mode != "r+") {
+                platform::set_last_error(EINVAL);
+                return NativeOutcome::produced(null_pointer());
+            }
+            std::FILE* stream = platform::file_open(path, mode);
+            if (!stream) return NativeOutcome::produced(null_pointer());
+            void* cookie = services.system.open_handle(
+                HandleKind::File, static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(stream)));
+            if (!cookie) {
+                std::fclose(stream);
+                return NativeOutcome::failed("out of memory opening a file");
+            }
+            platform::clear_last_error();
+            return NativeOutcome::produced(pointer_value(cookie));
+        }
+
+        case bytecode::NativeId::SysClose: {
+            HandleSlot* slot = handle_of(services, argv[0]);
+            // Closing null, or something already closed, is a no-op -- the way
+            // `khuStdMem.release(null)` is, and the way C's `fclose` is not.
+            if (!slot) return NativeOutcome::nothing();
+            const void* cookie = slot->cookie;
+            switch (slot->kind) {
+                case HandleKind::File: {
+                    auto* stream =
+                        reinterpret_cast<std::FILE*>(static_cast<std::uintptr_t>(slot->descriptor));
+                    if (std::fclose(stream) != 0) {
+                        platform::capture_errno();
+                    } else {
+                        platform::clear_last_error();
+                    }
+                    break;
+                }
+                case HandleKind::Socket:
+                case HandleKind::Listener:
+                    if (platform::socket_close(static_cast<platform::Socket>(slot->descriptor))) {
+                        platform::clear_last_error();
+                    }
+                    break;
+                case HandleKind::None:
+                    break;
+            }
+            services.system.forget(cookie);
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysIsOpen:
+            return NativeOutcome::produced(
+                Value::make_bool(handle_of(services, argv[0]) != nullptr));
+
+        case bytecode::NativeId::SysErrno:
+            return NativeOutcome::produced(int32_of(platform::last_error()));
+
+        case bytecode::NativeId::SysErrorMessage:
+            return NativeOutcome::produced(Value::make_string(services.make_string(
+                platform::error_message(static_cast<int>(argv[0].as_int)))));
+
+        // --- khuStdSystem: reading and writing an open handle ---------------
+
+        case bytecode::NativeId::SysReadText: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::produced(Value::make_string(services.make_string("")));
+            std::int64_t max = argv[1].as_int;
+            if (max <= 0) {
+                return NativeOutcome::produced(Value::make_string(services.make_string("")));
+            }
+            // Read in chunks rather than allocating `max` up front. `max` is a
+            // ceiling the caller names, not a promise about how much is there,
+            // and a program that asks for a gigabyte from a ten-byte file
+            // should not make the runtime reserve a gigabyte to find that out.
+            constexpr std::size_t kChunk = 64 * 1024;
+            std::string text;
+            auto remaining = static_cast<std::size_t>(max);
+            char scratch[kChunk];
+            while (remaining > 0) {
+                std::size_t want = remaining < kChunk ? remaining : kChunk;
+                std::size_t read = std::fread(scratch, 1, want, stream);
+                text.append(scratch, read);
+                remaining -= read;
+                if (read < want) {
+                    if (std::ferror(stream)) platform::capture_errno();
+                    break;
+                }
+            }
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(std::move(text))));
+        }
+
+        case bytecode::NativeId::SysReadByte: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::produced(int32_of(-1));
+            int byte = std::fgetc(stream);
+            if (byte == EOF && std::ferror(stream)) platform::capture_errno();
+            return NativeOutcome::produced(int32_of(byte == EOF ? -1 : byte));
+        }
+
+        case bytecode::NativeId::SysReadLine: {
+            std::FILE* stream = file_of(services, argv[0]);
+            std::string line;
+            if (!stream) {
+                return NativeOutcome::produced(
+                    Value::make_string(services.make_string(std::move(line))));
+            }
+            int byte = 0;
+            while ((byte = std::fgetc(stream)) != EOF && byte != '\n') {
+                line.push_back(static_cast<char>(byte));
+            }
+            if (byte == EOF && std::ferror(stream)) platform::capture_errno();
+            // A file written on Windows and read on Linux must give the same
+            // lines, so the carriage return goes whichever platform we are on.
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(std::move(line))));
+        }
+
+        case bytecode::NativeId::SysWriteText: {
+            std::FILE* stream = file_of(services, argv[0]);
+            std::string_view text;
+            if (!text_of(argv[1], text)) {
+                return NativeOutcome::failed(
+                    "khuStdSystem.writeText was given null instead of a string");
+            }
+            if (!stream) return NativeOutcome::nothing();
+            if (!text.empty() && std::fwrite(text.data(), 1, text.size(), stream) != text.size()) {
+                platform::capture_errno();
+            }
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysWriteBytes: {
+            std::int64_t count = argv[2].as_int;
+            void* block = nullptr;
+            NativeOutcome checked =
+                check_range("khuStdSystem.writeBytes", argv[1], count, block);
+            if (!checked.ok) return checked;
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream || count == 0 || !block) return NativeOutcome::nothing();
+            if (std::fwrite(block, 1, static_cast<std::size_t>(count), stream) !=
+                static_cast<std::size_t>(count)) {
+                platform::capture_errno();
+            }
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysFlush: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::nothing();
+            if (std::fflush(stream) != 0) platform::capture_errno();
+            return NativeOutcome::nothing();
+        }
+
+        // --- khuStdSystem: where a stream is, and how it ended --------------
+
+        case bytecode::NativeId::SysSeek: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::produced(Value::make_bool(false));
+            // One id, two declarations: the int32 and int64 forms differ only
+            // in the width the checker accepted, and `as_int` is already the
+            // widened value either way.
+            return NativeOutcome::produced(Value::make_bool(platform::file_seek(
+                stream, argv[1].as_int, static_cast<int>(argv[2].as_int))));
+        }
+
+        case bytecode::NativeId::SysTell: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::produced(int32_of(-1));
+            std::int64_t where = platform::file_tell(stream);
+            // Past what an int32 can name is reported rather than truncated:
+            // a silently wrong position is worse than a sentinel.
+            if (where > 0x7fffffffll) {
+                platform::set_last_error(EOVERFLOW);
+                return NativeOutcome::produced(int32_of(-1));
+            }
+            return NativeOutcome::produced(int32_of(where));
+        }
+
+        case bytecode::NativeId::SysRewind: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::nothing();
+            std::rewind(stream);
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysAtEof: {
+            std::FILE* stream = file_of(services, argv[0]);
+            // The `feof` flag, not a look-ahead: it says a read already ran off
+            // the end, not that the next one will.
+            return NativeOutcome::produced(
+                Value::make_bool(stream != nullptr && std::feof(stream) != 0));
+        }
+
+        case bytecode::NativeId::SysError: {
+            std::FILE* stream = file_of(services, argv[0]);
+            return NativeOutcome::produced(
+                Value::make_bool(stream != nullptr && std::ferror(stream) != 0));
+        }
+
+        case bytecode::NativeId::SysClearError: {
+            std::FILE* stream = file_of(services, argv[0]);
+            if (stream) std::clearerr(stream);
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysFileSize: {
+            // The path form and the handle form are one native, told apart by
+            // the argument's tag -- the same shape khuStdMem.sizeOf has.
+            if (argv[0].tag == TypeTag::String) {
+                std::string path;
+                if (!string_argument(argv[0], path)) return null_string_trap(id);
+                return NativeOutcome::produced(
+                    Value::make_int(TypeTag::Int64, platform::path_length(path)));
+            }
+            std::FILE* stream = file_of(services, argv[0]);
+            if (!stream) return NativeOutcome::produced(Value::make_int(TypeTag::Int64, -1));
+            return NativeOutcome::produced(
+                Value::make_int(TypeTag::Int64, platform::file_length(stream)));
+        }
+
+        // --- khuStdSystem: the process -------------------------------------
+
+        case bytecode::NativeId::SysArgc:
+            return NativeOutcome::produced(
+                int32_of(static_cast<std::int64_t>(services.system.program_args.size())));
+
+        case bytecode::NativeId::SysArgv:
+            return string_list(services, id, services.system.program_args);
+
+        case bytecode::NativeId::SysGetEnv: {
+            std::string name;
+            if (!string_argument(argv[0], name)) return null_string_trap(id);
+            std::string value;
+            platform::get_env(name, value);
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(std::move(value))));
+        }
+
+        case bytecode::NativeId::SysHasEnv: {
+            std::string name;
+            if (!string_argument(argv[0], name)) return null_string_trap(id);
+            std::string ignored;
+            return NativeOutcome::produced(Value::make_bool(platform::get_env(name, ignored)));
+        }
+
+        case bytecode::NativeId::SysEnvKeys:
+            return string_list(services, id, platform::env_keys());
+
+        case bytecode::NativeId::SysExit: {
+            // Flush first, then leave: a program that printed and then exited
+            // must have printed. `main` returning normally flushes, so exiting
+            // has to as well or the two would not agree.
+            services.flush_output();
+            services.flush_error();
+            services.system.request_exit(static_cast<int>(argv[0].as_int));
+            return NativeOutcome::nothing();
+        }
+
+        // --- khuStdSystem: files and directories by path --------------------
+
+        case bytecode::NativeId::SysExists:
+        case bytecode::NativeId::SysIsFile:
+        case bytecode::NativeId::SysIsDirectory:
+        case bytecode::NativeId::SysDeleteFile:
+        case bytecode::NativeId::SysCreateDirectory:
+        case bytecode::NativeId::SysRemoveDirectory:
+        case bytecode::NativeId::SysChangeDirectory: {
+            std::string path;
+            if (!string_argument(argv[0], path)) return null_string_trap(id);
+            bool answer = false;
+            switch (id) {
+                case bytecode::NativeId::SysExists: answer = platform::path_exists(path); break;
+                case bytecode::NativeId::SysIsFile: answer = platform::path_is_file(path); break;
+                case bytecode::NativeId::SysIsDirectory:
+                    answer = platform::path_is_directory(path);
+                    break;
+                case bytecode::NativeId::SysDeleteFile:
+                    answer = platform::delete_file(path);
+                    break;
+                case bytecode::NativeId::SysCreateDirectory:
+                    answer = platform::create_directory(path);
+                    break;
+                case bytecode::NativeId::SysRemoveDirectory:
+                    answer = platform::remove_directory(path);
+                    break;
+                default: answer = platform::change_directory(path); break;
+            }
+            if (answer) platform::clear_last_error();
+            return NativeOutcome::produced(Value::make_bool(answer));
+        }
+
+        case bytecode::NativeId::SysRename: {
+            std::string from;
+            std::string to;
+            if (!string_argument(argv[0], from) || !string_argument(argv[1], to)) {
+                return null_string_trap(id);
+            }
+            bool renamed = platform::rename_path(from, to);
+            if (renamed) platform::clear_last_error();
+            return NativeOutcome::produced(Value::make_bool(renamed));
+        }
+
+        case bytecode::NativeId::SysCurrentDirectory:
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(platform::current_directory())));
+
+        case bytecode::NativeId::SysPathSeparator:
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(platform::path_separator())));
+
+        case bytecode::NativeId::SysPathListSeparator:
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(platform::path_list_separator())));
+
+        // --- khuStdSystem: sockets ------------------------------------------
+
+        case bytecode::NativeId::SysListen: {
+            std::string host;
+            if (!string_argument(argv[0], host)) return null_string_trap(id);
+            // 128 is what a modern kernel caps the accept queue at anyway, and
+            // a blocking single-threaded server cannot use more.
+            platform::Socket socket =
+                platform::socket_listen(host, static_cast<int>(argv[1].as_int), 128);
+            if (socket == platform::kInvalidSocket) {
+                return NativeOutcome::produced(null_pointer());
+            }
+            void* cookie = services.system.open_handle(HandleKind::Listener, socket);
+            if (!cookie) {
+                platform::socket_close(socket);
+                return NativeOutcome::failed("out of memory opening a listening socket");
+            }
+            return NativeOutcome::produced(pointer_value(cookie));
+        }
+
+        case bytecode::NativeId::SysAccept: {
+            platform::Socket listener = socket_of(services, argv[0], true);
+            if (listener == platform::kInvalidSocket) {
+                return NativeOutcome::produced(null_pointer());
+            }
+            platform::Socket connection = platform::socket_accept(listener);
+            if (connection == platform::kInvalidSocket) {
+                return NativeOutcome::produced(null_pointer());
+            }
+            void* cookie = services.system.open_handle(HandleKind::Socket, connection);
+            if (!cookie) {
+                platform::socket_close(connection);
+                return NativeOutcome::failed("out of memory accepting a connection");
+            }
+            return NativeOutcome::produced(pointer_value(cookie));
+        }
+
+        case bytecode::NativeId::SysConnect: {
+            std::string host;
+            if (!string_argument(argv[0], host)) return null_string_trap(id);
+            platform::Socket socket =
+                platform::socket_connect(host, static_cast<int>(argv[1].as_int));
+            if (socket == platform::kInvalidSocket) {
+                return NativeOutcome::produced(null_pointer());
+            }
+            void* cookie = services.system.open_handle(HandleKind::Socket, socket);
+            if (!cookie) {
+                platform::socket_close(socket);
+                return NativeOutcome::failed("out of memory opening a connection");
+            }
+            return NativeOutcome::produced(pointer_value(cookie));
+        }
+
+        case bytecode::NativeId::SysSend:
+        case bytecode::NativeId::SysRecv: {
+            bool sending = id == bytecode::NativeId::SysSend;
+            const char* what = sending ? "khuStdSystem.send" : "khuStdSystem.recv";
+            std::int64_t count = argv[2].as_int;
+            void* block = nullptr;
+            NativeOutcome checked = check_range(what, argv[1], count, block);
+            if (!checked.ok) return checked;
+            platform::Socket socket = socket_of(services, argv[0], false);
+            if (socket == platform::kInvalidSocket) {
+                return NativeOutcome::produced(int32_of(-1));
+            }
+            if (count == 0 || !block) return NativeOutcome::produced(int32_of(0));
+            std::int64_t moved =
+                sending ? platform::socket_send(socket, block, static_cast<std::size_t>(count))
+                        : platform::socket_recv(socket, block, static_cast<std::size_t>(count));
+            return NativeOutcome::produced(int32_of(moved));
+        }
+
+        case bytecode::NativeId::SysShutdown: {
+            platform::Socket socket = any_socket_of(services, argv[0]);
+            if (socket == platform::kInvalidSocket) return NativeOutcome::nothing();
+            platform::socket_shutdown(socket, static_cast<int>(argv[1].as_int));
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysPeerAddress:
+        case bytecode::NativeId::SysPeerPort:
+        case bytecode::NativeId::SysLocalPort: {
+            bool local = id == bytecode::NativeId::SysLocalPort;
+            platform::Socket socket = any_socket_of(services, argv[0]);
+            std::string address;
+            int port = -1;
+            bool known = socket != platform::kInvalidSocket &&
+                         (local ? platform::socket_local(socket, address, port)
+                                : platform::socket_peer(socket, address, port));
+            if (!known) {
+                address.clear();
+                port = -1;
+            }
+            if (id == bytecode::NativeId::SysPeerAddress) {
+                return NativeOutcome::produced(
+                    Value::make_string(services.make_string(std::move(address))));
+            }
+            return NativeOutcome::produced(int32_of(port));
+        }
+
+        case bytecode::NativeId::SysSetReadTimeout: {
+            platform::Socket socket = any_socket_of(services, argv[0]);
+            if (socket == platform::kInvalidSocket) return NativeOutcome::nothing();
+            platform::socket_set_read_timeout(socket, static_cast<int>(argv[1].as_int));
+            return NativeOutcome::nothing();
+        }
+
+        case bytecode::NativeId::SysResolveHost: {
+            std::string name;
+            if (!string_argument(argv[0], name)) return null_string_trap(id);
+            std::string address;
+            platform::resolve_host(name, address);
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(std::move(address))));
         }
 
         case bytecode::NativeId::None:

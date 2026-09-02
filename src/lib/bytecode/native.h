@@ -23,7 +23,9 @@
 // 700 - 799   khuStdMem           (Phase 8)
 // 800 - 849   khuStdRandom        (Phase 9)
 // 850 - 899   khuStdTime          (Phase 9)
-// 900 - 949   khuStdSystem        (Phase 9)
+// 900 - 999   khuStdSystem        (Phase 9) -- the full block, not 900-949:
+//             tests/unit/test_natives.cpp grants the namespace everything up
+//             to kNativeBlockEnd - 1, and the v1 surface uses 46 of the 100.
 #ifndef KHU_BYTECODE_NATIVE_H
 #define KHU_BYTECODE_NATIVE_H
 
@@ -194,6 +196,10 @@ enum : std::uint32_t {
        its type, which is what a container over an erased element needs. */    \
     X(Hash,              500, "khuStdCollection.hash",     1)                  \
     X(SameValue,         501, "khuStdCollection.sameValue", 1)                \
+    /* The one member here that is about a container rather than a value:      \
+       joining a List<string>, which is what a program builds output out of    \
+       once `concat` runs out of arity. */                                     \
+    X(Join,              502, "khuStdCollection.join",     1)                  \
     /* khuStdMem -- manual buffers and the operations over them. */            \
     X(MemAlloc,          700, "khuStdMem.alloc",          1)                  \
     X(MemRealloc,        701, "khuStdMem.realloc",        1)                  \
@@ -224,7 +230,67 @@ enum : std::uint32_t {
     X(TimeNowNanos,      851, "khuStdTime.nowNanos",      1)                  \
     X(TimeNowString,     852, "khuStdTime.nowString",     1)                  \
     X(TimeSleep,         853, "khuStdTime.sleep",         0)                  \
-    X(TimeMonotonicNanos, 854, "khuStdTime.monotonicNanos", 1)
+    X(TimeMonotonicNanos, 854, "khuStdTime.monotonicNanos", 1)                \
+    /* khuStdSystem -- the operating system: open streams, the process, the    \
+       file namespace and sockets. Every member behaves the same way on Linux  \
+       and on Windows; the platform differences live in src/vm/platform.cpp.   \
+       A handle is an opaque `*byte` cookie, so files and sockets share one    \
+       registry and one `close`. */                                           \
+    X(SysOpen,           900, "khuStdSystem.open",          1)                 \
+    X(SysClose,          901, "khuStdSystem.close",         0)                 \
+    X(SysReadText,       902, "khuStdSystem.readText",      1)                 \
+    X(SysWriteText,      903, "khuStdSystem.writeText",     0)                 \
+    X(SysWriteBytes,     904, "khuStdSystem.writeBytes",    0)                 \
+    X(SysIsOpen,         905, "khuStdSystem.isOpen",        1)                 \
+    X(SysErrno,          906, "khuStdSystem.errno",         1)                 \
+    X(SysReadByte,       907, "khuStdSystem.readByte",      1)                 \
+    X(SysReadLine,       908, "khuStdSystem.readLine",      1)                 \
+    X(SysSeek,           909, "khuStdSystem.seek",          1)                 \
+    X(SysTell,           910, "khuStdSystem.tell",          1)                 \
+    X(SysFlush,          911, "khuStdSystem.flush",         0)                 \
+    X(SysAtEof,          912, "khuStdSystem.atEof",         1)                 \
+    X(SysError,          913, "khuStdSystem.error",         1)                 \
+    X(SysClearError,     914, "khuStdSystem.clearError",    0)                 \
+    X(SysRewind,         915, "khuStdSystem.rewind",        0)                 \
+    /* One id, two declarations: the binding table keys on name and arity, so   \
+       fileSize(handle) and fileSize(path) arrive here together and the tag     \
+       says which was written -- exactly how khuStdMem.sizeOf works. */         \
+    X(SysFileSize,       916, "khuStdSystem.fileSize",      1)                 \
+    /* The process surface. */                                                 \
+    X(SysArgc,           920, "khuStdSystem.argc",          1)                 \
+    X(SysArgv,           921, "khuStdSystem.argv",          1)                 \
+    X(SysGetEnv,         922, "khuStdSystem.getEnv",        1)                 \
+    X(SysHasEnv,         923, "khuStdSystem.hasEnv",        1)                 \
+    X(SysEnvKeys,        924, "khuStdSystem.envKeys",       1)                 \
+    X(SysExit,           925, "khuStdSystem.exit",          0)                 \
+    /* Files and directories by path, and the separators a portable program     \
+       builds paths out of. */                                                 \
+    X(SysExists,         930, "khuStdSystem.exists",        1)                 \
+    X(SysIsFile,         931, "khuStdSystem.isFile",        1)                 \
+    X(SysIsDirectory,    932, "khuStdSystem.isDirectory",   1)                 \
+    X(SysDeleteFile,     933, "khuStdSystem.deleteFile",    1)                 \
+    X(SysRename,         934, "khuStdSystem.rename",        1)                 \
+    X(SysCreateDirectory, 935, "khuStdSystem.createDirectory", 1)              \
+    X(SysRemoveDirectory, 936, "khuStdSystem.removeDirectory", 1)              \
+    X(SysCurrentDirectory, 937, "khuStdSystem.currentDirectory", 1)            \
+    X(SysChangeDirectory, 938, "khuStdSystem.changeDirectory", 1)              \
+    X(SysErrorMessage,   939, "khuStdSystem.errorMessage",  1)                 \
+    X(SysPathSeparator,  940, "khuStdSystem.pathSeparator", 1)                 \
+    X(SysPathListSeparator, 941, "khuStdSystem.pathListSeparator", 1)          \
+    /* Sockets, on the same handle layer. All blocking: setReadTimeout is the   \
+       one escape hatch a single-threaded server needs so a stalled peer cannot \
+       wedge it for ever (EXPANSION-PLAN.md, section 3). */                     \
+    X(SysListen,         950, "khuStdSystem.listen",        1)                 \
+    X(SysAccept,         951, "khuStdSystem.accept",        1)                 \
+    X(SysConnect,        952, "khuStdSystem.connect",       1)                 \
+    X(SysSend,           953, "khuStdSystem.send",          1)                 \
+    X(SysRecv,           954, "khuStdSystem.recv",          1)                 \
+    X(SysPeerAddress,    955, "khuStdSystem.peerAddress",   1)                 \
+    X(SysPeerPort,       956, "khuStdSystem.peerPort",      1)                 \
+    X(SysLocalPort,      957, "khuStdSystem.localPort",     1)                 \
+    X(SysSetReadTimeout, 958, "khuStdSystem.setReadTimeout", 0)                \
+    X(SysResolveHost,    959, "khuStdSystem.resolveHost",   1)                 \
+    X(SysShutdown,       960, "khuStdSystem.shutdown",      0)
 
 enum class NativeId : std::uint32_t {
     None = 0,

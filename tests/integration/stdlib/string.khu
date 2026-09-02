@@ -71,5 +71,14 @@ public class Strings {
 
         // The argument is never modified: it may be a constant in the image.
         io.printLine(greeting);
+
+        // Concat goes up to sixteen arguments. The implementation always
+        // walked whatever it was given; the ceiling is how many declarations
+        // lib/string.khu writes, and it is high enough to build a whole HTTP
+        // header in one call rather than chaining.
+        io.printLine(khuStdString.concat("a", "b", "c", "d", "e", "f", "g"));
+        io.printLine(khuStdString.concat("a", "b", "c", "d", "e", "f", "g", "h", "i", "j"));
+        io.printLine(khuStdString.concat("a", "b", "c", "d", "e", "f", "g", "h",
+                                         "i", "j", "k", "l", "m", "n", "o", "p"));
     }
 }

@@ -1,0 +1,51 @@
+// khuStdSystem: an open stream, from `open` to `close`.
+//
+// Success paths only. Nothing here prints an `errno()` code or an
+// `errorMessage()` string, because both are platform-specific numbers and text
+// -- so this same .expected file is what the program prints on Linux and on
+// Windows (EXPANSION-PLAN.md, section 2.6).
+public class SystemFiles {
+    func main() {
+        string path = "khu_system_files.tmp";
+
+        *byte out = khuStdSystem.open(path, "w");
+        io.printLine(khuStdSystem.isOpen(out));
+        khuStdSystem.writeText(out, "alpha\n");
+        khuStdSystem.writeText(out, "beta\n");
+        khuStdSystem.flush(out);
+        io.printLine(khuStdSystem.fileSize(out));
+        khuStdSystem.close(out);
+        io.printLine(khuStdSystem.isOpen(out));
+
+        // Reading it back: a line, a byte, and where the stream is afterwards.
+        *byte in = khuStdSystem.open(path, "r");
+        io.printLine(khuStdSystem.readLine(in));
+        io.printLine(khuStdSystem.tell(in));
+        io.printLine(khuStdSystem.readByte(in));
+        io.printLine(khuStdSystem.atEof(in));
+        io.printLine(khuStdSystem.error(in));
+
+        // Seeking and rewinding, and the three flags the end of a file sets.
+        khuStdSystem.seek(in, 6, 0);
+        io.printLine(khuStdSystem.readText(in, 16));
+        io.printLine(khuStdSystem.atEof(in));
+        khuStdSystem.clearError(in);
+        io.printLine(khuStdSystem.atEof(in));
+        khuStdSystem.rewind(in);
+        io.printLine(khuStdSystem.tell(in));
+        io.printLine(khuStdSystem.readLine(in));
+        khuStdSystem.close(in);
+
+        // Appending, and the path form of fileSize.
+        *byte more = khuStdSystem.open(path, "a");
+        khuStdSystem.writeText(more, "gamma\n");
+        khuStdSystem.close(more);
+        io.printLine(khuStdSystem.fileSize(path));
+
+        // Every handle was a manual block, and every one of them came back.
+        io.printLine(khuStdMem.liveBlocks());
+
+        khuStdSystem.deleteFile(path);
+        io.printLine(khuStdSystem.exists(path));
+    }
+}

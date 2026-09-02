@@ -1,0 +1,294 @@
+// khuStdSystem -- the operating system.
+//
+// Everything a program needs to talk to the world outside its own heap: open
+// streams, the process it is running as, the file namespace, and sockets. It is
+// the answer to "the heap will not let a normal process talk to anything", the
+// way khuStdMem is the answer to "the collector will not let me own raw bytes".
+//
+// ## Portable, not POSIX
+//
+// Every member here behaves the same way on Linux and on Windows. There is no
+// "machine specific" corner: the file layer is C `stdio` (which is byte for
+// byte the same on both), paths are built out of `pathSeparator()` rather than
+// a hard-coded `/`, and the platform differences live in one C++ file
+// (`src/vm/platform.cpp`) that the natives call rather than branch on.
+//
+// Two things are honestly platform-specific, and both are *named* rather than
+// hidden:
+//
+//   - `errno()` is a **platform-specific number**. `errorMessage(code)` is its
+//     readable form. Neither belongs in a golden test.
+//   - A few operations legitimately fail on one platform where they succeed on
+//     the other -- Windows will not `rename` onto an existing target, and will
+//     not `deleteFile` a file that is still open. Those answer `false` and set
+//     `errno()`, which is data a program can act on, rather than pretending.
+//
+// ## Handles
+//
+// An open file or socket is a **handle**: an opaque `*byte` this runtime owns.
+// It is not a buffer, and nothing may be read out of it with `[]` -- it is a
+// token, and the operations here are the only things that understand it.
+//
+//     *byte file = khuStdSystem.open("notes.txt", "r");
+//     if (khuStdMem.isNull(file)) {
+//         khuStdErr.errPrintLine(khuStdSystem.errorMessage(khuStdSystem.errno()));
+//         return;
+//     }
+//     io.print(khuStdSystem.readText(file, 4096));
+//     khuStdSystem.close(file);
+//
+// A handle costs one small manual block, so it shows up in the same leak
+// accounting a buffer does: `khuStdMem.liveBytes()` and `liveBlocks()` report
+// it, and `close` returns them. Files and sockets share one registry, so they
+// share one `close` and one `errno`.
+//
+// ## Failure is a value
+//
+// Khudra has no exceptions, and `khuErrors.Result<T>` is a roadmap item, so
+// this namespace uses the same sentinel convention `khuStdConv` parsing does:
+//
+//   - `open`, `listen`, `connect` and `accept` answer **null** on failure.
+//   - `readByte` and `recv` answer **-1**; `recv` answers 0 at end of stream.
+//   - `readLine` and the string-producing members answer **""**.
+//   - Everything that only succeeds or fails answers a **bool**.
+//
+// In every case `errno()` then holds the reason. Because `readByte` answers -1
+// for a clean end of input *and* for a broken stream, `atEof(handle)` and
+// `error(handle)` are separate questions -- exactly the reason C has both
+// `feof` and `ferror` -- and `clearError` clears both.
+//
+// ## What is deliberately not here
+//
+// Threads, non-blocking I/O and event loops; UDP, `select`, TLS and reverse
+// DNS; process spawning and signals; directory listing, temp files and full
+// file metadata. Sockets are blocking, and `setReadTimeout` is the one timeout,
+// because a single-threaded server otherwise has no way to stop a stalled peer
+// from wedging it for ever.
+
+public namespace khuStdSystem {
+
+    // ---------------------------------------------------------------------
+    // Handles: opening, closing, and the last error
+    // ---------------------------------------------------------------------
+
+    // Opens `path` and answers a handle, or **null** with `errno()` set.
+    //
+    // `mode` is C's: "r" reads, "w" truncates or creates, "a" appends, "r+"
+    // reads and writes an existing file. Every mode is byte-oriented -- there
+    // is no text/binary distinction to declare, because a Khudra string is a
+    // byte string -- which is what makes "r" read the same bytes on Linux and
+    // on Windows.
+    native func open(string path, string mode) -> *byte;
+
+    // Closes a file or a socket and releases its handle. Closing null, or a
+    // handle that is already closed, does nothing. After this the handle is
+    // spent: `isOpen` answers false and every other operation fails.
+    native func close(*byte handle);
+
+    // Whether `handle` names something still open. False for null, for a
+    // closed handle, and for a `*byte` that was never a handle at all.
+    native func isOpen(*byte handle) -> bool;
+
+    // The code the last failing operation in this namespace left behind, or 0.
+    // It is the **operating system's own number** -- `errno` on POSIX, and the
+    // Win32/Winsock code on Windows, because Winsock never touches `errno` --
+    // so its value is not portable and must never appear in a golden test.
+    // `errorMessage` turns it into something a person can read.
+    native func errno() -> int32;
+
+    // The readable form of a code from `errno()`. Text, and therefore also
+    // platform-specific: print it, do not compare it.
+    native func errorMessage(int32 code) -> string;
+
+    // ---------------------------------------------------------------------
+    // Reading and writing an open handle
+    // ---------------------------------------------------------------------
+
+    // Up to `max` bytes from `handle`, as a string. A short answer means end of
+    // input or an error -- `atEof` and `error` say which. A `max` of 0 or less
+    // reads nothing.
+    native func readText(*byte handle, int32 max) -> string;
+
+    // One byte, or **-1** at end of input *and* on a read error. `atEof` and
+    // `error` tell the two apart.
+    native func readByte(*byte handle) -> int32;
+
+    // One line without its newline, or "" at end of input. A trailing "\r" is
+    // dropped, so a file written on Windows reads the same way on Linux.
+    native func readLine(*byte handle) -> string;
+
+    // Writes `text` to `handle`. Buffered like C's `stdio`; `flush` pushes it.
+    native func writeText(*byte handle, string text);
+
+    // Writes `count` bytes from a buffer. The buffer is a real `khuStdMem`
+    // allocation and the range is checked against it, exactly the way
+    // `io.writeBytes` checks.
+    native func writeBytes(*byte handle, *byte source, int32 count);
+
+    // Pushes this handle's buffered output out. `io.flush` is the standard
+    // output stream and nothing else; this is the per-handle form.
+    native func flush(*byte handle);
+
+    // ---------------------------------------------------------------------
+    // Where a stream is, and how it ended
+    // ---------------------------------------------------------------------
+
+    // Moves the read/write position. `origin` is 0 from the start, 1 from the
+    // current position, 2 from the end -- the same three C's `fseek` takes.
+    // Seeking clears the end-of-input flag, the way C's does.
+    native func seek(*byte handle, int32 offset, int32 origin) -> bool;
+    // The same, for a file too large to address in 32 bits.
+    native func seek(*byte handle, int64 offset, int32 origin) -> bool;
+
+    // The current position, or -1 with `errno()` set -- including when the
+    // position is past what an int32 can name, in which case `fileSize` and the
+    // int64 form of `seek` are the ones to reach for.
+    native func tell(*byte handle) -> int32;
+
+    // Back to the start, and both flags cleared.
+    native func rewind(*byte handle);
+
+    // Whether a read has already run off the end of this stream. This is the
+    // **flag** C's `feof` reports, set by a read that reached the end -- not a
+    // look-ahead that says the next read will fail.
+    native func atEof(*byte handle) -> bool;
+
+    // Whether a read or a write on this stream has failed (C's `ferror`).
+    // Distinct from `atEof`: end of input is not an error.
+    native func error(*byte handle) -> bool;
+
+    // Clears both flags, so a stream can be read again after a failure.
+    native func clearError(*byte handle);
+
+    // How many bytes the open stream currently holds. -1 with `errno()` set
+    // when it cannot be measured -- a socket, for one, has no length.
+    //
+    // This is deliberately **not** `khuStdMem.sizeOf(handle)`: that reports how
+    // big the handle's own cookie is, which is a few bytes and never the file.
+    native func fileSize(*byte handle) -> int64;
+
+    // ---------------------------------------------------------------------
+    // The process
+    // ---------------------------------------------------------------------
+
+    // How many arguments the program was given, and what they were.
+    //
+    // These are the program's own arguments, not the toolchain's: `khudra run
+    // program.khu -- a b c` passes `a b c`, and a binary written by `khudra
+    // build` passes everything after its own name. The `--` is what keeps
+    // khudra's flags and the program's apart.
+    native func argc() -> int32;
+    native func argv() -> List<string>;
+
+    // The value of an environment variable, or "" when it is not set. Because
+    // a variable really can be set to the empty string, `hasEnv` is what
+    // distinguishes "set to nothing" from "not set".
+    native func getEnv(string name) -> string;
+    native func hasEnv(string name) -> bool;
+
+    // Every name in the environment. The order is the one the C library holds
+    // them in, which is not sorted and not portable -- sort it if it matters.
+    native func envKeys() -> List<string>;
+
+    // Ends the program with `code`, after flushing what it has written.
+    //
+    // This unwinds the same way a fatal runtime error does, so the VM, `run
+    // --native` and a built binary all report the same exit status -- which is
+    // the invariant the whole native backend is built around.
+    native func exit(int32 code);
+
+    // ---------------------------------------------------------------------
+    // Files and directories by path
+    // ---------------------------------------------------------------------
+    //
+    // The operations above name a *stream*. These name the *namespace*: they
+    // ask about and change paths without opening anything.
+
+    // Whether the path names anything at all, and what sort of thing it is.
+    native func exists(string path) -> bool;
+    native func isFile(string path) -> bool;
+    native func isDirectory(string path) -> bool;
+
+    // The file's length in bytes, or 0 with `errno()` set when it cannot be
+    // read. The handle form above is the same question about an open stream.
+    native func fileSize(string path) -> int64;
+
+    // Removes a file. False with `errno()` set when it will not go -- which on
+    // Windows includes a file something still has open.
+    native func deleteFile(string path) -> bool;
+
+    // Renames or moves. False with `errno()` set on failure; note that Windows
+    // refuses to replace an existing `to` where POSIX silently would, so a
+    // program that wants one behaviour on both platforms checks `exists` first.
+    native func rename(string from, string to) -> bool;
+
+    // Creates one directory. There is no mode argument: `_mkdir` has none on
+    // Windows and neither does `File.mkdir()`, so the signature is the one both
+    // platforms can honour. The parent must already exist.
+    native func createDirectory(string path) -> bool;
+
+    // Removes one empty directory.
+    native func removeDirectory(string path) -> bool;
+
+    // The working directory, and moving it. `currentDirectory` answers "" with
+    // `errno()` set if it cannot be read.
+    native func currentDirectory() -> string;
+    native func changeDirectory(string path) -> bool;
+
+    // The separators this platform builds paths and PATH-like lists out of:
+    // "/" and ":" on POSIX, "\" and ";" on Windows. A portable program joins
+    // with these rather than writing a separator down.
+    native func pathSeparator() -> string;
+    native func pathListSeparator() -> string;
+
+    // ---------------------------------------------------------------------
+    // Sockets
+    // ---------------------------------------------------------------------
+    //
+    // Blocking TCP, on the same handle layer files use -- so `close`, `errno`
+    // and `isOpen` are the same operations. Enough for a real server:
+    // `listen`, then `accept` in a loop, then `recv`/`send`, then `close`.
+
+    // A listening socket, or **null** with `errno()` set. An empty `host`
+    // listens on every interface; a `port` of 0 asks the system to choose one,
+    // which `localPort` then reports.
+    native func listen(string host, int32 port) -> *byte;
+
+    // Waits for a connection and answers a handle for it, or **null** when the
+    // listener has been closed or the wait failed.
+    native func accept(*byte listener) -> *byte;
+
+    // Connects to a peer. Null with `errno()` set on failure.
+    native func connect(string host, int32 port) -> *byte;
+
+    // Sends up to `count` bytes from a buffer and answers how many went, or -1.
+    // A short write is normal: send the rest in another call.
+    native func send(*byte conn, *byte data, int32 count) -> int32;
+
+    // Reads up to `count` bytes into a buffer. Answers how many arrived, **0**
+    // when the peer has finished sending, or -1 on failure. This is the raw
+    // byte read: a binary body never has to go through a string.
+    native func recv(*byte conn, *byte buffer, int32 count) -> int32;
+
+    // Half-closes a connection: 0 stops reading, 1 stops writing, 2 both. This
+    // is how a server says "that is the whole body" without dropping the
+    // connection.
+    native func shutdown(*byte conn, int32 how);
+
+    // Who is on the other end, for an access log. "" and -1 on failure.
+    native func peerAddress(*byte conn) -> string;
+    native func peerPort(*byte conn) -> int32;
+
+    // The port this socket is actually bound to, which is what makes listening
+    // on port 0 usable. -1 on failure.
+    native func localPort(*byte handle) -> int32;
+
+    // Stops a read from blocking for ever. `millis` of 0 means "no limit",
+    // which is the default. A read that times out fails with `errno()` set.
+    native func setReadTimeout(*byte conn, int32 millis);
+
+    // The first address `name` resolves to, as text, or "" with `errno()` set.
+    // Separating this from `connect` is what lets a program tell "that name
+    // does not exist" apart from "nothing is listening there".
+    native func resolveHost(string name) -> string;
+}

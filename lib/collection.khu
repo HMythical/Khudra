@@ -72,4 +72,16 @@ public namespace khuStdCollection {
     // How many elements `array` holds. Accepts any array, typed or not:
     // a length does not depend on the element type.
     native func arraySize(Array array) -> int32;
+
+    // Every element of `items` in order, with `separator` between them. An
+    // empty list joins to "", and a list of one joins to that one element with
+    // no separator at all.
+    //
+    // This is where a program goes once `khuStdString.concat` runs out of
+    // arity: a response body, a PATH-like list, a comma-separated line. It
+    // reads the list through its own `size()` and `get()`, so a `List` that
+    // holds something other than strings is a runtime error rather than
+    // nonsense -- generics are erased, and this is the point where that has to
+    // be noticed.
+    native func join(List<string> items, string separator) -> string;
 }

@@ -23,16 +23,25 @@ if(NOT build_code EQUAL 0)
         "--- stdout ---\n${build_output}")
 endif()
 
+
+# `khudra build` writes `<output>.exe` on Windows and `<output>` everywhere
+# else, so the artifact to run is whichever of the two is on disk. Resolving it
+# here keeps the harness one script rather than two.
+set(binary "${OUTPUT}")
+if(NOT EXISTS "${binary}" AND EXISTS "${OUTPUT}.exe")
+    set(binary "${OUTPUT}.exe")
+endif()
+
 if(NOT DEFINED NM OR NM STREQUAL "NM-NOTFOUND")
     message(STATUS "nm is not available; skipping the interpreter-absence check")
     return()
 endif()
 
 execute_process(
-    COMMAND "${NM}" -C "${OUTPUT}"
+    COMMAND "${NM}" -C "${binary}"
     OUTPUT_VARIABLE symbols ERROR_VARIABLE symbol_errors RESULT_VARIABLE symbol_code)
 if(NOT symbol_code EQUAL 0)
-    message(STATUS "nm could not read ${OUTPUT}; skipping the interpreter-absence check")
+    message(STATUS "nm could not read ${binary}; skipping the interpreter-absence check")
     return()
 endif()
 

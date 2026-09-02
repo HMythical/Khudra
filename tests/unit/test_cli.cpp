@@ -162,3 +162,58 @@ KHU_TEST(cli, help_and_version_parse_as_commands) {
     KHU_CHECK(khu::cli::parse_command("-V") == Command::Version);
     KHU_CHECK(khu::cli::parse_command("build") == Command::Build);
 }
+
+// ---------------------------------------------------------------------------
+// The `--` separator
+//
+// khuStdSystem.argv() answers with what a program was given, which means there
+// has to be a way to give a program an argument khudra also spells. `--` is it.
+// ---------------------------------------------------------------------------
+
+KHU_TEST(cli, passes_everything_after_a_separator_to_the_program) {
+    Options options;
+    std::string error;
+    KHU_CHECK(parse({"khudra", "run", "a.khu", "--", "one", "two"}, options, error));
+    KHU_CHECK(options.command == Command::Run);
+    KHU_CHECK_EQ(options.input, std::string("a.khu"));
+    KHU_CHECK_EQ(options.program_args.size(), std::size_t(2));
+    KHU_CHECK_EQ(options.program_args[0], std::string("one"));
+    KHU_CHECK_EQ(options.program_args[1], std::string("two"));
+}
+
+KHU_TEST(cli, a_programs_flags_are_not_khudras) {
+    // This is the whole reason the separator exists: `--native` after `--` is
+    // the program's argument, and khudra still runs on the VM.
+    Options options;
+    std::string error;
+    KHU_CHECK(parse({"khudra", "run", "a.khu", "--", "--native", "-o", "x"}, options, error));
+    KHU_CHECK_EQ(options.native, false);
+    KHU_CHECK_EQ(options.output, std::string(""));
+    KHU_CHECK_EQ(options.program_args.size(), std::size_t(3));
+    KHU_CHECK_EQ(options.program_args[0], std::string("--native"));
+}
+
+KHU_TEST(cli, a_separator_with_nothing_after_it_is_no_arguments) {
+    Options options;
+    std::string error;
+    KHU_CHECK(parse({"khudra", "run", "a.khu", "--"}, options, error));
+    KHU_CHECK(options.program_args.empty());
+}
+
+KHU_TEST(cli, khudras_own_flags_still_work_before_the_separator) {
+    Options options;
+    std::string error;
+    KHU_CHECK(parse({"khudra", "run", "--native", "a.khu", "--", "x"}, options, error));
+    KHU_CHECK_EQ(options.native, true);
+    KHU_CHECK_EQ(options.input, std::string("a.khu"));
+    KHU_CHECK_EQ(options.program_args.size(), std::size_t(1));
+}
+
+KHU_TEST(cli, program_arguments_are_rejected_where_nothing_runs) {
+    // `khudra check -- x` has no program to give `x` to, so it is a mistake
+    // rather than something quietly ignored.
+    Options options;
+    std::string error;
+    KHU_CHECK(!parse({"khudra", "check", "a.khu", "--", "x"}, options, error));
+    KHU_CHECK_CONTAINS(error, "arguments after '--' are for the program being run");
+}

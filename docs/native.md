@@ -230,8 +230,42 @@ This is enforced, not asserted:
 | `native_abi.*` (unit) | `KhuValue`/`KhuObjectHeader` against `src/vm/value.h` and `src/vm/object.h`, plus the type tags, object flags and call-depth guard |
 | `natives.*` (unit) | every native id is known, sits in its namespace's reserved block, and declares the stack effect its signature implies |
 | `native_binary_has_no_interpreter` | no `khu::vm::Vm` symbol in a built binary |
+| `system.*` (unit) | `khuStdSystem` under both backends: handles, files, sockets, `argv()`, and the exit code |
+| `http_server_over_tcp` (script) | `examples/http_server.khu` served by all three backends and driven by a real `curl` |
 
 Everything stays green under `-DKHU_SANITIZE=ON`.
+
+### Sockets and the system library
+
+`khuStdSystem` (docs and declarations in `lib/system.khu`) is the newest thing
+that has to honour the invariant, and it honours it the same way everything
+else does: **one implementation, two callers**. The natives live in
+`src/vm/natives.cpp` like all the others, and everything platform-shaped sits
+behind `src/vm/platform.{h,cpp}` -- so `khudra run`, `khudra run --native` and a
+built binary open the same files, bind the same sockets and answer the same
+`errno()`.
+
+Three parts of it needed something genuinely new:
+
+- **A native that produces a Khudra object.** `argv()` answers a real
+  `List<string>`, which `NativeOutcome` cannot carry. `NativeServices` grew
+  `materialize`, `invoke` and a `RootScope`, implemented once by `Vm::Services`
+  and once by `NativeHost::Services`, both running the ordinary materialization
+  pipeline. A native cannot build something the language could not.
+- **Exit.** `khuStdSystem.exit(code)` unwinds exactly the way a trap does --
+  frames come off, `run()` answers false -- with the difference that no error
+  text is set. Each driver reads `exit_requested()`/`exit_code()`, so
+  `differential_system_exit_code` can compare a status of 7 across all three
+  backends.
+- **Program arguments.** Threaded from three separate `main`s:
+  `khu_main.cpp` (after a `--` on the command line), `run_jit`'s `program_args`,
+  and `aot_main.cpp`'s own `argv`.
+
+Sockets themselves have no golden, and cannot: a port and a moment in time are
+not byte-comparable. They are covered by the `system.*` unit tests, which run
+every exchange under both backends in one process, and by
+`scripts/test_http_server.sh`, which drives `examples/http_server.khu` with a
+real `curl` once per backend.
 
 ---
 
@@ -262,8 +296,19 @@ Khudra source tree to build.
 
 ## 7. Limits
 
-- POSIX hosts. The loader uses `dlopen` and the toolchain uses `posix_spawn`;
-  the AOT path drops the dynamic-loading dependency but not the process one.
+- POSIX hosts and Windows/MinGW-w64. The platform-tied parts are the loader
+  (`dlopen` against `LoadLibrary`), the toolchain (`posix_spawn` against
+  `CreateProcess`) and the symbol model; each is one shim, and the lowered
+  translation unit is the same portable C11 either way. **MSVC is not
+  supported**: it needs a generated `.def`, an import library and
+  `__declspec(dllexport)` on the four boundary symbols, which is the one place
+  the emission side would have to change.
+- The symbol model differs between the two, and it is worth knowing which you
+  are on. On POSIX the `dlopen`'d object leaves every `khu_rt_*` dangling and
+  the loader satisfies it from the executable's dynamic table (`-rdynamic`,
+  which CMake spells `ENABLE_EXPORTS`). Windows has no dangling-symbol model,
+  so `khudra.exe` is linked with `--export-all-symbols` and the emitted DLL
+  *imports* those symbols, with the exe itself on the DLL's link line.
 - A host compiler is required, as described in section 1.
 - `run --native` pays for a C compile at startup. It is a way to *run* native
   code, not a low-latency JIT; `khudra build` is where the compile happens once.

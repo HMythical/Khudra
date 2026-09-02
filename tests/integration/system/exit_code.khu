@@ -1,0 +1,18 @@
+// khuStdSystem.exit: the same status under every backend.
+//
+// This one is deliberately not a golden -- run_golden.cmake requires a clean
+// exit, and the whole point here is that the exit is not clean. The
+// differential harness is the right one: it compares stdout, stderr *and* the
+// exit code across the VM, `run --native` and a built binary, which is the
+// invariant `exit` has to honour (docs/native.md, section 5).
+public class ExitCode {
+    func main() {
+        io.printLine("before");
+        khuStdErr.errPrintLine("on the error stream");
+        // Whatever is buffered goes out before the process does, so a program
+        // that printed and then exited has printed.
+        khuStdSystem.exit(7);
+        // Unreachable: exit unwinds the way a trap does.
+        io.printLine("after");
+    }
+}

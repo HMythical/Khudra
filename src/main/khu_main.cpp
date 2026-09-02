@@ -42,9 +42,14 @@ void dump_tokens(const khu::Compiler& compiler, const khu::util::Array<khu::lexe
 }
 
 // Executes a loaded image on the bytecode VM.
-int execute(const khu::bytecode::Module& module) {
+int execute(const khu::bytecode::Module& module, const Options& options) {
     khu::vm::Vm vm(module);
+    vm.set_program_args(options.program_args);
     if (!vm.run()) {
+        // Two ways to stop early, and only one of them is a fault:
+        // `khuStdSystem.exit(code)` unwinds exactly the way a trap does, so the
+        // exit code is what tells them apart, not the return value.
+        if (vm.exit_requested()) return vm.exit_code();
         std::fwrite(vm.error().data(), 1, vm.error().size(), stderr);
         return 1;
     }
@@ -59,7 +64,7 @@ int execute(const khu::bytecode::Module& module) {
 int execute_native(const khu::bytecode::Module& module, const Options& options) {
     int exit_code = 0;
     std::string error;
-    switch (khu::native::run_jit(module, exit_code, error)) {
+    switch (khu::native::run_jit(module, exit_code, error, nullptr, &options.program_args)) {
         case khu::native::NativeStatus::Ok:
             return exit_code;
         case khu::native::NativeStatus::NoCompiler:
@@ -67,7 +72,7 @@ int execute_native(const khu::bytecode::Module& module, const Options& options) 
                          "khudra: %s: no host C compiler (cc, clang or gcc) was found, so "
                          "--native falls back to the bytecode VM\n",
                          options.input.c_str());
-            return execute(module);
+            return execute(module, options);
         case khu::native::NativeStatus::Failed:
             break;
     }
@@ -114,7 +119,7 @@ int run_stage(const Options& options) {
             }
             if (options.command == Command::Build) return build_native(module, options);
             if (options.command == Command::Run) {
-                return options.native ? execute_native(module, options) : execute(module);
+                return options.native ? execute_native(module, options) : execute(module, options);
             }
             std::string text = khu::bytecode::disassemble(module);
             std::fwrite(text.data(), 1, text.size(), stdout);
@@ -192,7 +197,7 @@ int run_stage(const Options& options) {
             return build_native(module, options);
 
         case Command::Run:
-            return options.native ? execute_native(module, options) : execute(module);
+            return options.native ? execute_native(module, options) : execute(module, options);
 
         default:
             break;
