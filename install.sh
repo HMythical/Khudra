@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Builds and installs the khudra compiler to ${PREFIX}. Building is delegated
+# to build.sh (./build.sh) whenever the binary is missing, so the how-to-build
+# knowledge lives in one place; pass --clean to force a rebuild of an existing
+# tree. Uninstall with ./uninstall.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="khudra"
 VERSION="0.1.0-dev"
@@ -35,14 +39,27 @@ else
 fi
 
 # ── build ─────────────────────────────────────────────────────────────
+# The build lives in build.sh, which install.sh delegates to whenever the
+# binary is missing (a fresh checkout, or a rebuild requested with --clean).
+# Flags we recognise are passed through so a reinstall can force a rebuild.
+BUILD_PROFILE=()            # extra options forwarded to build.sh
+for arg in "$@"; do
+    case "$arg" in
+        --clean|--debug|--asan) BUILD_PROFILE+=("$arg") ;;
+        *) warn "Ignoring unknown install option: $arg" ;;
+    esac
+done
+
 BINARY="${SCRIPT_DIR}/build/khudra"
-if [[ ! -f "$BINARY" ]]; then
-    info "No pre-built binary found. Building ${APP_NAME}..."
-    command -v cmake >/dev/null 2>&1 || error "cmake is required but not installed."
-    command -v make  >/dev/null 2>&1 || error "make is required but not installed."
-    cmake -S "$SCRIPT_DIR" -B "${SCRIPT_DIR}/build" -DCMAKE_BUILD_TYPE=Release
-    cmake --build "${SCRIPT_DIR}/build" -j"$(nproc)"
-    info "Build complete."
+if [[ ! -f "$BINARY" ]] || [[ " ${BUILD_PROFILE[*]:-} " == *" --clean "* ]]; then
+    if [[ ! -f "$BINARY" ]]; then
+        info "No pre-built binary found. Building ${APP_NAME}..."
+    else
+        info "Forced rebuild requested (--clean). Rebuilding ${APP_NAME}..."
+    fi
+    "${SCRIPT_DIR}/build.sh" "${BUILD_PROFILE[@]}"
+else
+    info "Using existing binary ${BINARY}"
 fi
 
 [[ -f "$BINARY" ]] || error "Build failed – binary not found at ${BINARY}"

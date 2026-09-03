@@ -1,0 +1,49 @@
+// A simple temperature converter: Celsius, Fahrenheit and Kelvin.
+//
+// Demonstrates floating-point arithmetic through khuStdMath, number-to-string
+// conversion via khuStdConv.toString, and string building with
+// khuStdString.concat.
+bring khu::stdlib;
+
+public class TemperatureConverter {
+    func toFahrenheit(dfloat c) -> dfloat {
+        return khuStdMath.add(khuStdMath.multiply(c, 9.0 / 5.0), 32.0);
+    }
+
+    func toCelsius(dfloat f) -> dfloat {
+        return khuStdMath.multiply(khuStdMath.subtract(f, 32.0), 5.0 / 9.0);
+    }
+
+    func toKelvin(dfloat c) -> dfloat {
+        return khuStdMath.add(c, 273.15);
+    }
+
+    func printConversion(string label, dfloat value) {
+        io.print(label);
+        io.print(khuStdConv.toString(value));
+        io.printLine("");
+    }
+
+    func main() {
+        io.printLine("=== Temperature Converter ===");
+        io.printLine("");
+
+        dfloat boiling = 100.0;
+        dfloat freezing = 0.0;
+        dfloat body = 37.0;
+
+        this.printConversion("100 C in Fahrenheit: ", this.toFahrenheit(boiling));
+        this.printConversion("  0 C in Fahrenheit: ", this.toFahrenheit(freezing));
+        this.printConversion(" 37 C in Fahrenheit: ", this.toFahrenheit(body));
+        io.printLine("");
+
+        this.printConversion("212 F in Celsius: ", this.toCelsius(212.0));
+        this.printConversion(" 32 F in Celsius: ", this.toCelsius(32.0));
+        this.printConversion(" 98.6 F in Celsius: ", this.toCelsius(98.6));
+        io.printLine("");
+
+        this.printConversion("100 C in Kelvin: ", this.toKelvin(boiling));
+        this.printConversion("  0 C in Kelvin: ", this.toKelvin(freezing));
+        this.printConversion(" -40 C in Kelvin: ", this.toKelvin(-40.0));
+    }
+}

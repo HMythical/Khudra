@@ -1,3 +1,4 @@
+
 // Methods, calls and control flow: what the bytecode VM has to get right
 // before objects exist.
 bring khu::stdlib;

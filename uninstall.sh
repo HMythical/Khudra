@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="khudra"
+
+# Removes the installed khudra files (from the install manifest) and, by
+# default, the local build directories that build.sh produces. Pass
+# --keep-build to leave ./build and ./build-asan in the source tree.
 
 # ── defaults (must match install.sh) ──────────────────────────────────
 PREFIX="${PREFIX:-/usr/local}"
 SHARE_DIR="${PREFIX}/share/${APP_NAME}"
 MANIFEST="${SHARE_DIR}/.install_manifest"
+KEEP_BUILD=0
+
+# ── arguments ─────────────────────────────────────────────────────────
+for arg in "$@"; do
+    case "$arg" in
+        --keep-build) KEEP_BUILD=1 ;;
+        -h|--help)
+            echo "Usage: $0 [--keep-build]"
+            echo "  --keep-build   leave the local build dirs (./build, ./build-asan) behind"
+            echo "                 instead of removing them"
+            exit 0
+            ;;
+        *) warn "Ignoring unknown option: $arg (try --help)" ;;
+    esac
+done
 
 # ── colours ───────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -57,6 +77,21 @@ for dir in "${SHARE_DIR}/docs" "${SHARE_DIR}/examples" "${SHARE_DIR}" "${SHARE_D
         info "Removed empty directory ${dir}"
     fi
 done
+
+# ── clean up the local build directories (from build.sh) ──────────────
+# These are source-tree artifacts, separate from the installed binary in the
+# manifest above. Removed by default so a teardown is complete; kept with
+# --keep-build so a user's compiled objects survive.
+if [[ "$KEEP_BUILD" -eq 0 ]]; then
+    for bdir in "${SCRIPT_DIR}/build" "${SCRIPT_DIR}/build-asan"; do
+        if [[ -d "$bdir" ]]; then
+            $SUDO rm -rf "$bdir"
+            info "Removed local build directory ${bdir}"
+        fi
+    done
+else
+    warn "Keeping local build directories (--keep-build)"
+fi
 
 echo ""
 info "Uninstall complete. ${REMOVED} file(s) removed."

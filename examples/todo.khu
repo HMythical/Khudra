@@ -1,0 +1,166 @@
+// A task manager: Tasks held in a generic List, managed from a TodoApp that
+// materializes, populates a backlog, and walks several operations over it.
+//
+// This shows a bigger Khudra program: three classes, a generic container from
+// the standard library, the Procedures materialization hook, string building,
+// and a little state -- marking and removing tasks by id.
+bring khu::stdlib;
+
+public class Task {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    public int32 id = 0;
+    public string title = "";
+    public bool done = false;
+
+    public Task(int32 id, string title) {
+        this.id = id;
+        this.title = title;
+    }
+
+    func markDone() {
+        this.done = true;
+    }
+
+    func describe() {
+        string status = "pending";
+        if (this.done) {
+            status = "done";
+        }
+        io.print(khuStdString.concat("[", khuStdConv.toString(this.id), "] ",
+                                     this.title, " -- ", status));
+        io.printLine("");
+    }
+}
+
+public class TaskList {
+    public MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    public List<Task> tasks = List<Task>();
+
+    public TaskList() {
+    }
+
+    func addTask(string title) -> int32 {
+        int32 nextId = khuStdMath.add(this.tasks.size(), 1);
+        Task fresh = Task(nextId, title);
+        this.tasks.add(fresh);
+        io.print("added task ");
+        io.print(nextId);
+        io.print(": ");
+        io.printLine(title);
+        return nextId;
+    }
+
+    // The index of the task with the given id, or -1 when there is none.
+    method findIndex(int32 id) -> int32 {
+        int32 i = 0;
+        int32 n = this.tasks.size();
+        while (i < n) {
+            Task t = this.tasks.get(i);
+            if (t.id == id) {
+                return i;
+            }
+            i = khuStdMath.add(i, 1);
+        }
+        return -1;
+    }
+
+    func completeTask(int32 id) {
+        int32 at = this.findIndex(id);
+        if (at < 0) {
+            io.printLine("no task with that id");
+            return;
+        }
+        Task t = this.tasks.get(at);
+        t.markDone();
+        io.print("completed: ");
+        io.printLine(t.title);
+    }
+
+    func removeTask(int32 id) {
+        int32 at = this.findIndex(id);
+        if (at < 0) {
+            io.printLine("no task with that id");
+            return;
+        }
+        Task gone = this.tasks.get(at);
+        this.tasks.removeAt(at);
+        io.print("removed: ");
+        io.printLine(gone.title);
+    }
+
+    func listAll() {
+        int32 i = 0;
+        int32 n = this.tasks.size();
+        if (n == 0) {
+            io.printLine("(no tasks)");
+            return;
+        }
+        while (i < n) {
+            Task t = this.tasks.get(i);
+            t.describe();
+            i = khuStdMath.add(i, 1);
+        }
+    }
+
+    func summary() {
+        int32 total = this.tasks.size();
+        int32 done = 0;
+        int32 i = 0;
+        while (i < total) {
+            Task t = this.tasks.get(i);
+            if (t.done) {
+                done = khuStdMath.add(done, 1);
+            }
+            i = khuStdMath.add(i, 1);
+        }
+        int32 pending = khuStdMath.subtract(total, done);
+        io.print(khuStdString.concat("summary: ", khuStdConv.toString(total),
+                                     " total, ", khuStdConv.toString(done),
+                                     " done, ", khuStdConv.toString(pending)));
+        io.printLine(" pending");
+    }
+}
+
+public class TodoApp {
+    private MemoryAllocationTypeObject type = MemoryAllocationTypeObject.setStandard();
+
+    public TaskList list = TaskList();
+
+    private Procedures {
+        io.printLine("=== Khudra Task Manager ===");
+    }
+
+    public TodoApp() {
+        this.list.addTask("Write a simple Khudra program");
+        this.list.addTask("Write a complex Khudra program");
+        this.list.addTask("Run both through the VM");
+        this.list.addTask("Check native output matches");
+    }
+
+    func main() {
+        io.printLine("");
+        io.printLine("-- initial backlog --");
+        this.list.listAll();
+        this.list.summary();
+
+        io.printLine("");
+        io.printLine("-- completing two tasks --");
+        this.list.completeTask(1);
+        this.list.completeTask(2);
+
+        io.printLine("");
+        this.list.listAll();
+        this.list.summary();
+
+        io.printLine("");
+        io.printLine("-- adding and removing --");
+        this.list.addTask("Write golden tests");
+        this.list.removeTask(3);
+
+        io.printLine("");
+        this.list.listAll();
+        this.list.summary();
+    }
+}
