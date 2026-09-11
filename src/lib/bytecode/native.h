@@ -312,7 +312,18 @@ enum : std::uint32_t {
     X(KernelErrorMessage, 1006, "khuAdvKernel.errorMessage", 1)                \
     X(KernelToAddress,    1007, "khuAdvKernel.toAddress",    1)                \
     X(KernelFromAddress,  1008, "khuAdvKernel.fromAddress",  1)                \
-    X(KernelDropAddress,  1009, "khuAdvKernel.dropAddress",  0)
+    X(KernelDropAddress,  1009, "khuAdvKernel.dropAddress",  0)                  \
+    /* khuAdvKernelLinux -- the raw and curated Linux syscall tier. The first     \
+       eight ids are the raw gate: seven invoke overloads (arities 1-7) and      \
+       the name-to-number lookup. The curated members arrive in Phase 3. */      \
+    X(KernelLinuxInvoke1, 1100, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxInvoke2, 1101, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxInvoke3, 1102, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxInvoke4, 1103, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxInvoke5, 1104, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxInvoke6, 1105, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxInvoke7, 1106, "khuAdvKernelLinux.invoke", 1)                  \
+    X(KernelLinuxNumber,  1107, "khuAdvKernelLinux.number",  1)
 
 enum class NativeId : std::uint32_t {
     None = 0,

@@ -419,6 +419,26 @@ NativeBinding bind_kernel(std::string_view member_name, std::size_t arity) {
     return NativeBinding{};
 }
 
+// khuAdvKernelLinux: the raw Linux syscall tier. invoke is overloaded by arity
+// (seven same-name declarations, seven ids), and number is the name-to-syscall
+// lookup. The curated surface (read, write, openAt, ...) arrives in Phase 3.
+NativeBinding bind_linux(std::string_view member_name, std::size_t arity) {
+    if (member_name == "invoke") {
+        switch (arity) {
+            case 1: return to_native(Native::KernelLinuxInvoke1);
+            case 2: return to_native(Native::KernelLinuxInvoke2);
+            case 3: return to_native(Native::KernelLinuxInvoke3);
+            case 4: return to_native(Native::KernelLinuxInvoke4);
+            case 5: return to_native(Native::KernelLinuxInvoke5);
+            case 6: return to_native(Native::KernelLinuxInvoke6);
+            case 7: return to_native(Native::KernelLinuxInvoke7);
+            default: break;
+        }
+    }
+    if (arity == 1 && member_name == "number") return to_native(Native::KernelLinuxNumber);
+    return NativeBinding{};
+}
+
 bool is_kernel_namespace(std::string_view namespace_name) {
     return namespace_name == kKernelNamespace || namespace_name == kKernelLinuxNamespace ||
            namespace_name == kKernelWindowsNamespace || namespace_name == kKernelMacNamespace;
@@ -438,6 +458,7 @@ NativeBinding resolve_native_binding(std::string_view namespace_name,
     if (namespace_name == kTimeNamespace) return bind_time(member_name, arity);
     if (namespace_name == kSystemNamespace) return bind_system(member_name, arity);
     if (namespace_name == kKernelNamespace) return bind_kernel(member_name, arity);
+    if (namespace_name == kKernelLinuxNamespace) return bind_linux(member_name, arity);
     if (namespace_name == kRuntimeNamespace) return bind_runtime(member_name, arity);
     return NativeBinding{};
 }

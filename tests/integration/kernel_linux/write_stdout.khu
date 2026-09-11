@@ -1,0 +1,29 @@
+public class KernelWriteStdout {
+    func main() {
+        *byte message = khuStdMem.alloc(19);
+        message[0] = 104;
+        message[1] = 101;
+        message[2] = 108;
+        message[3] = 108;
+        message[4] = 111;
+        message[5] = 32;
+        message[6] = 102;
+        message[7] = 114;
+        message[8] = 111;
+        message[9] = 109;
+        message[10] = 32;
+        message[11] = 115;
+        message[12] = 121;
+        message[13] = 115;
+        message[14] = 99;
+        message[15] = 97;
+        message[16] = 108;
+        message[17] = 108;
+        message[18] = 10;
+        int64 written = khuAdvKernelLinux.invoke(
+            khuAdvKernelLinux.number("write"), 1,
+            khuAdvKernel.toAddress(message), 19);
+        io.printLine(written == 19);
+        khuStdMem.release(message);
+    }
+}

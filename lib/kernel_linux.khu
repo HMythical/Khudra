@@ -1,0 +1,68 @@
+// khuAdvKernelLinux -- direct Linux syscalls.
+//
+// This namespace is the Linux half of the kernel tier: it exposes the raw
+// `syscall(2)` gate that lets a Khudra program talk directly to the Linux
+// kernel, and the curated members that arrive in Phase 3 will wrap the most
+// common file and memory operations in checked, pointer-safe surfaces.
+//
+// Nothing here is portable. A program that calls into this namespace will trap
+// at run time if it runs on Windows or macOS -- the wrong-OS trap is a fatal
+// error, not a sentinel, because -1 is a legitimate syscall return and
+// errno-style reporting would let a program keep running on the wrong host
+// while looking like it merely got EPERM (PLAN.md, section 7).
+//
+// ## The raw tier -- invoke and number
+//
+// `invoke` is the raw gate, overloaded by arity. Its arguments are machine
+// words (`int64`) and nothing about them is checked: the runtime does not know
+// which are pointers, which are sizes, which are flags. That is what *raw*
+// means, and it is why `--allow-kernel` is the primary guard. The seven
+// overloads cover the Linux syscall ABI, which passes at most six arguments
+// beyond the number.
+//
+// `number(name)` answers the syscall number for `name` on this host and
+// architecture, read from the system headers at compile time. An unrecognised
+// name answers -1: an input error takes the sentinel convention rather than
+// trapping, because the caller may want to test whether a syscall exists.
+//
+// The curated tier (read, write, openAt, close, lseek, ioctl, mmap, munmap,
+// mprotect) is checked: every buffer goes through check_range before the
+// syscall, embedded NULs in paths are rejected, and mmap returns a
+// length-tracked pointer the runtime can validate. It arrives in Phase 3
+// (PLAN.md, section 6.2).
+//
+// Flag constants (O_RDONLY, O_WRONLY, ...) are zero-argument natives because
+// a namespace has no const members yet (docs/roadmap.md, section 91-103) --
+// the same reason khuStdMath.pi() is a call.
+public namespace khuAdvKernelLinux {
+
+    // --- The raw gate, overloaded by arity -----------------------------------
+    //
+    // Arguments are machine words and nothing about them is checked. The
+    // syscall number is the first argument; up to six additional int64 values
+    // follow. The answer is the raw return value of the syscall: a non-negative
+    // number on success, -errno on failure (the Linux convention).
+
+    // invoke(number) -- a syscall with no arguments beyond the number itself.
+    native func invoke(int64 number) -> int64;
+    // invoke(number, a0) -- one argument.
+    native func invoke(int64 number, int64 a0) -> int64;
+    // invoke(number, a0, a1) -- two arguments.
+    native func invoke(int64 number, int64 a0, int64 a1) -> int64;
+    // invoke(number, a0, a1, a2) -- three arguments.
+    native func invoke(int64 number, int64 a0, int64 a1, int64 a2) -> int64;
+    // invoke(number, a0, a1, a2, a3) -- four arguments.
+    native func invoke(int64 number, int64 a0, int64 a1, int64 a2, int64 a3) -> int64;
+    // invoke(number, a0, a1, a2, a3, a4) -- five arguments.
+    native func invoke(int64 number, int64 a0, int64 a1, int64 a2, int64 a3,
+                       int64 a4) -> int64;
+    // invoke(number, a0, a1, a2, a3, a4, a5) -- six arguments, the Linux maximum.
+    native func invoke(int64 number, int64 a0, int64 a1, int64 a2, int64 a3,
+                       int64 a4, int64 a5) -> int64;
+
+    // The syscall number for `name` on this host and architecture, read from
+    // the system headers at compile time. An unrecognised name answers -1: the
+    // name is input, not a program error, so it takes the sentinel convention
+    // rather than a fatal trap (PLAN.md, section 6.2).
+    native func number(string name) -> int64;
+}

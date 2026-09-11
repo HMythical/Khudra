@@ -1,0 +1,29 @@
+// A direct syscall through khuAdvKernelLinux's raw gate.
+//
+// This program has no business being portable: it writes a buffer to stdout by
+// asking the Linux kernel to do it. Run it with --allow-kernel, the way the
+// gate requires:
+//
+//     khudra run --allow-kernel examples/kernel_write.khu
+//
+// `number("write")` reads SYS_write from the host's own headers, so the same
+// source compiles on any Linux architecture; `toAddress` turns the buffer's
+// pointer into the machine word the syscall ABI wants; and `invoke` returns
+// what the kernel reported.
+public class KernelWrite {
+    func main() {
+        *byte message = khuStdMem.alloc(14);
+        message[0] = 104;  message[1] = 101;  message[2] = 108;
+        message[3] = 108;  message[4] = 111;  message[5] = 32;
+        message[6] = 115;  message[7] = 121;  message[8] = 115;
+        message[9] = 99;   message[10] = 97;  message[11] = 108;
+        message[12] = 108; message[13] = 10;
+        int64 written = khuAdvKernelLinux.invoke(
+            khuAdvKernelLinux.number("write"), 1,
+            khuAdvKernel.toAddress(message), 14);
+        if (written != 14) {
+            io.printLine("partial write");
+        }
+        khuStdMem.release(message);
+    }
+}

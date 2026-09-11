@@ -106,6 +106,9 @@ NativeBinding bind_runtime(std::string_view member_name, std::size_t arity);
 // The shared khuAdvKernel namespace. The per-OS tiers bind in later phases,
 // one function per namespace, exactly the way the rest of the table grows.
 NativeBinding bind_kernel(std::string_view member_name, std::size_t arity);
+// khuAdvKernelLinux: the raw Linux syscall gate (invoke, number). The curated
+// tier arrives in Phase 3 (lib/kernel_linux.khu).
+NativeBinding bind_linux(std::string_view member_name, std::size_t arity);
 // Whether `namespace_name` is one of the kernel tier's namespaces. The checker
 // uses it as the compile-time half of the trust model: a namespace the program
 // is allowed to reach is `allow_kernel`, every kernel namespace is gated on it.

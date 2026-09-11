@@ -7,6 +7,21 @@ All notable changes to Khudra are recorded here. Kinds: **added**, **changed**,
 
 ### Added
 
+- **The kernel tier, phase 2 of three** (`khuAdvKernelLinux` raw tier): the
+  raw gate a Linux program reaches the actual kernel through.
+  - `invoke` overloaded by arity (1-7, ids 1100-1106) passes machine words
+    straight to `syscall(2)` with nothing checked -- the raw contract -- and
+    `number(name)` reads `SYS_*` from the host's headers, answering -1 for an
+    unrecognised name (an input sentinel, not a trap).
+  - On a non-Linux host every member is the wrong-OS fatal trap, which is what
+    makes the `platform()`-guarded branch idiom safe (PLAN.md, section 7).
+  - Tests: the first genuine OS-specific golden
+    (`tests/integration/kernel_linux/write_stdout.khu`, registered only under
+    the Linux host with `--allow-kernel` threaded through the harness), plus
+    the unit suite's own raw-gate checks on both backends.
+
+### Changed
+
 - **Inline assembly blocks** (`inline_asm { ... }`): the sibling of `inline_c`,
   splices raw assembly into the native backend's emitted translation unit as
   the guts of a GCC/Clang `__asm__ volatile(...)` statement. Same aliased

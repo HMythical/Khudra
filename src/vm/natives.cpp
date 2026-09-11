@@ -2138,6 +2138,32 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
         case bytecode::NativeId::KernelDropAddress:
             return kernel::drop_address(argv[0], services);
 
+        // --- khuAdvKernelLinux: the raw tier (Phase 2) -----------------------
+
+        case bytecode::NativeId::KernelLinuxInvoke1:
+            return kernel::linux_invoke_1(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxInvoke2:
+            return kernel::linux_invoke_2(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxInvoke3:
+            return kernel::linux_invoke_3(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxInvoke4:
+            return kernel::linux_invoke_4(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxInvoke5:
+            return kernel::linux_invoke_5(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxInvoke6:
+            return kernel::linux_invoke_6(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxInvoke7:
+            return kernel::linux_invoke_7(services, argv, argc);
+
+        case bytecode::NativeId::KernelLinuxNumber:
+            return kernel::linux_number(services, argv[0].as_text);
+
         case bytecode::NativeId::None:
             break;
     }

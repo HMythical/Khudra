@@ -94,6 +94,19 @@ NativeOutcome drop_address(const Value& region, NativeServices& services);
 // host the member was written for, `where` is the full member name.
 std::string wrong_os_message(std::string_view where, std::string_view expected);
 
+// khuAdvKernelLinux -- the raw gate (invoke) and the name lookup (number).
+// One entry point per arity, declared here and implemented in kernel_linux.cpp
+// with a #else stub for the wrong-OS trap (PLAN.md, section 9.3). The curated
+// tier's entry points arrive in Phase 3.
+NativeOutcome linux_invoke_1(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_invoke_2(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_invoke_3(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_invoke_4(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_invoke_5(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_invoke_6(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_invoke_7(NativeServices& services, const Value* argv, std::uint32_t argc);
+NativeOutcome linux_number(NativeServices& services, const std::string* name);
+
 }  // namespace khu::vm::kernel
 
 }  // namespace khu::vm

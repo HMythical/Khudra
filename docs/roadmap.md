@@ -271,6 +271,13 @@ fixed native ids instead of a symbol table, and the same trust boundary made
 explicit with the `--allow-kernel` gate, defaulting off because a program that
 talks to the kernel is not portable.
 
+Status on that seam:
+- `khuAdvKernel` (shared) and `khuAdvKernelLinux` (raw `invoke` / `number`)
+  **shipped**; the Linux curated tier, `khuAdvKernelWindows` and
+  `khuAdvKernelMac` follow in later phases of PLAN.md.
+- Windows gets no raw tier by design (PLAN.md, section 4.2); that is the FFI
+  item this whole section is about.
+
 ---
 
 ## Tooling

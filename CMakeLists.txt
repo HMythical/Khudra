@@ -359,6 +359,21 @@ add_test(
         -DOUTPUT=${KHU_NATIVE_TEST_BIN}/differential_system_exit_code
         -P ${CMAKE_SOURCE_DIR}/tests/integration/run_differential.cmake)
 
+# khuAdvKernel. The kernel tier is non-portable by construction, so these are
+# the first genuinely OS-specific goldens in the tree: each tests/integration/
+# kernel_<os>/ glob is registered only under the OS it was written for, and
+# `--allow-kernel` threads through the harness the way PLAN.md section 9.6
+# prescribes. A program that branches on platform() and prints the same thing
+# either way would hide the difference this library exists to expose, so each
+# golden is written against exactly one host.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    file(GLOB KHU_KERNEL_LINUX_GOLDEN_TESTS CONFIGURE_DEPENDS
+         "${CMAKE_SOURCE_DIR}/tests/integration/kernel_linux/*.khu")
+    foreach(golden ${KHU_KERNEL_LINUX_GOLDEN_TESTS})
+        khu_add_golden("kernel_linux_" "${golden}" --allow-kernel)
+    endforeach()
+endif()
+
 # The socket half of examples/http_server.khu, which no golden can cover: a
 # real server, driven by a real curl, once per backend. The script exits 0 with
 # a notice when curl is not installed, so a machine without it is not a failure.
@@ -427,7 +442,13 @@ endforeach()
 file(GLOB KHU_EXAMPLES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/examples/*.khu")
 foreach(example ${KHU_EXAMPLES})
     get_filename_component(example_name "${example}" NAME_WE)
-    add_test(NAME check_${example_name} COMMAND khudra check "${example}")
+    # The kernel example talks to the kernel, so its check needs the gate
+    # every other sample never needs; the rest of the loop is unchanged.
+    if(example_name STREQUAL "kernel_write")
+        add_test(NAME check_${example_name} COMMAND khudra check --allow-kernel "${example}")
+    else()
+        add_test(NAME check_${example_name} COMMAND khudra check "${example}")
+    endif()
 
     set(example_golden "${CMAKE_SOURCE_DIR}/tests/integration/examples/${example_name}.expected")
     if(EXISTS "${example_golden}")

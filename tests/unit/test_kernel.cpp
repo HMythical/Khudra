@@ -364,7 +364,88 @@ KHU_TEST(kernel, a_region_answers_exactly_what_it_knows) {
                  reinterpret_cast<std::uint64_t>(storage));
     KHU_CHECK_EQ(region->length, 64u);
     KHU_CHECK(services.find_base(static_cast<void*>(&storage[32])) == nullptr);
-    KHU_CHECK(services.extent_of(static_cast<void*>(&storage[65])) == 0u);
+    // 65 bytes past the region, computed in integer space: `&storage[65]`
+    // would itself be out of bounds on the char[64], which UBSan flags.
+    void* past_end =
+        reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(storage) + 65);
+    KHU_CHECK(services.extent_of(past_end) == 0u);
     services.forget(storage);
     KHU_CHECK(services.find_base(storage) == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// khuAdvKernelLinux -- the raw tier (Phase 2)
+// ---------------------------------------------------------------------------
+
+// The raw gate reaches the kernel: getpid answers a pid through the same
+// int64-return path the golden pins end to end, and the check is observable
+// through the sink on both backends (a raw fd write would bypass the sink, so
+// the golden is the right place for the byte-level proof).
+KHU_TEST(kernel_linux, invoke_reaches_the_kernel) {
+#if defined(__linux__)
+    Outcome result =
+        run_both("        int64 pid = khuAdvKernelLinux.invoke(khuAdvKernelLinux.number(\"getpid\"));\n"
+                 "        io.printLine(pid > 0);\n");
+    KHU_CHECK(result.ran);
+    KHU_CHECK_EQ(result.output, std::string("true\n"));
+#endif
+}
+
+// Arity can carry the full Linux argument list: write(1, buffer, count) needs
+// three arguments beyond the number, and the count the kernel reports comes
+// back as the raw gate's answer. The bytes land on the host's real stdout --
+// invisible to the sink -- so only the return value is asserted here.
+KHU_TEST(kernel_linux, write_returns_the_byte_count) {
+#if defined(__linux__)
+    Outcome result =
+        run_both("        *byte message = khuStdMem.alloc(14);\n"
+                 "        message[0] = 104;  message[1] = 101;  message[2] = 108;\n"
+                 "        message[3] = 108;  message[4] = 111;  message[5] = 32;\n"
+                 "        message[6] = 115;  message[7] = 121;  message[8] = 115;\n"
+                 "        message[9] = 99;   message[10] = 97;  message[11] = 108;\n"
+                 "        message[12] = 108; message[13] = 10;\n"
+                 "        int64 written = khuAdvKernelLinux.invoke(\n"
+                 "            khuAdvKernelLinux.number(\"write\"), 1,\n"
+                 "            khuAdvKernel.toAddress(message), 14);\n"
+                 "        io.printLine(written == 14);\n"
+                 "        khuStdMem.release(message);\n");
+    KHU_CHECK(result.ran);
+    KHU_CHECK_EQ(result.output, std::string("true\n"));
+#endif
+}
+
+// number() reads SYS_* from the host headers, so a known name answers a
+// positive number and an unrecognised name answers -1 -- the sentinel
+// convention for input, not a trap (PLAN.md, section 6.2).
+KHU_TEST(kernel_linux, number_answers_known_names_and_minus_one_for_unknown) {
+#if defined(__linux__)
+    Outcome result =
+        run_both("        io.printLine(khuAdvKernelLinux.number(\"write\") > 0);\n"
+                 "        io.printLine(khuAdvKernelLinux.number(\"noSuchSyscall\") == -1);\n");
+    KHU_CHECK(result.ran);
+    KHU_CHECK_EQ(result.output, std::string("true\ntrue\n"));
+#endif
+}
+
+// A missing case in the raw gate's stub is the wrong-OS trap: on a non-Linux
+// host, every khuAdvKernelLinux member is a fatal error with the exact
+// message the guard-branch idiom is meant to prevent. Not compile-guarded, but
+// the assertion only runs where it is true -- the same shape the rest of the
+// suite uses for platform facts.
+KHU_TEST(kernel_linux, a_linux_call_traps_on_a_non_linux_host) {
+#if !defined(__linux__)
+    std::string body = "        khuAdvKernelLinux.invoke(1);\n"
+                       "        io.printLine(\"unreachable\");\n";
+    Outcome vm = run_vm(body);
+    KHU_CHECK(!vm.ran);
+    KHU_CHECK_EQ(vm.output, std::string(""));
+    KHU_CHECK(vm.runtime_error.find("khuAdvKernelLinux.invoke is a Linux call, but this "
+                                    "program is running on ") != std::string::npos);
+
+    Outcome native;
+    if (run_native(body, native)) {
+        KHU_CHECK(!native.ran);
+        KHU_CHECK_EQ(native.runtime_error, vm.runtime_error);
+    }
+#endif
 }

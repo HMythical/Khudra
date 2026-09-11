@@ -119,7 +119,12 @@ bool parse_int(std::string_view text, std::uint32_t width, std::int64_t& out) {
     if (digits == 0 || overflowed) return false;
     if (index + digits != text.size()) return false;
     if (magnitude > limit) return false;
-    out = negative ? -static_cast<std::int64_t>(magnitude) : static_cast<std::int64_t>(magnitude);
+    // The negation happens in unsigned space: `-INT64_MIN` is UB in signed
+    // arithmetic, and the answer this function must give for "-9223372036854775808"
+    // is INT64_MIN. `0 - magnitude` wraps by the unsigned rules, which is
+    // defined behaviour at this width (UBSan's `-fsanitize=sign` agrees).
+    out = negative ? static_cast<std::int64_t>(0 - magnitude)
+                   : static_cast<std::int64_t>(magnitude);
     return true;
 }
 
