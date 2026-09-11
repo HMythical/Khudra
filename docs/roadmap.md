@@ -238,6 +238,19 @@ the counter that would trigger it.
 
 ## Interoperation
 
+### Inline blocks -- shipped (inline_c and inline_asm)
+
+**Seam:** the `inline_c { ... }` / `inline_asm { ... }` statements, lowered by
+`src/native/cemit/`.
+
+Raw C text, and raw assembly, with direct access to the enclosing method's
+frame through named `KhuValue* const` aliases. They are the source-level cousin
+of the FFI: same trust boundary, no symbol table. `inline_c` splices ordinary C
+into the emitted translation unit; `inline_asm` wraps its text in a
+`__asm__ volatile(...)` statement, so it is volatile side-effect-only by
+construction and restricted to pass-by-bytecode effects on the same aliased
+locals.
+
 ### FFI with C libraries
 
 **Seam:** `utils/proc_engine.h`, and `bytecode::NativeId`.

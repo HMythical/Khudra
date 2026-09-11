@@ -22,7 +22,7 @@ bring      class      public     private    Procedures
 func       method     return     this       null
 true       false      if         else       while
 free       dispose    manual     standard   extends
-void
+void       inline_c   inline_asm
 ```
 
 Type names are also reserved: `int8 int16 int32 int64 i8 i16 i32 i64
@@ -200,7 +200,96 @@ if (cond) { ... } else { ... }
 while (cond) { ... }
 free(expr);   dispose(expr);       // manual deallocation
 { ... }                            // block
+inline_c { ... }                   // raw C, native backend only
+inline_asm { ... }                 // raw assembly, native backend only
 ```
+
+### 5.1 Inline C
+
+`inline_c { ... }` splices its body verbatim into the C translation unit the
+native backend emits for the enclosing method. It is the raw-memory escape
+hatch: whatever C the block contains runs exactly as written, with direct
+access to the method's frame.
+
+- **Placement.** A block may appear wherever a statement may, inside a method
+  body. It is not an expression and produces no value.
+- **Locals.** Every named param and local of the enclosing method is in scope
+  of the block as a `KhuValue* const` alias into the frame, so C can read and
+  write them through the pointer:
+
+  ```khudra
+  int32 total = 0;
+  int32 addend = 7;
+  inline_c {
+      // total and addend are `KhuValue* const` pointing at the frame slots.
+      *total = khu_normalize_int(KHU_T_INT32,
+                                 total->v.as_int + addend->v.as_int * 2);
+  }
+  io.printLine(total);   // 14
+  ```
+
+  The aliases are declared between the frame setup and the first instruction,
+  and the opaque `KhuValue` layout plus its constructor helpers are documented
+  in `docs/native.md`, section 4. A name that would collide with the emitted
+  method's own signature (`self`, `argv`, `out`, `V`, `F`) or with a C keyword
+  is skipped, not renamed -- so such a local cannot be addressed by its Khudra
+  name from inside the block. The block may still reach the frame directly
+  through `V` and the runtime structures.
+- **Execution.** The block runs in line, between the surrounding statements,
+  with the operand-stack height published first so a GC safepoint inside it is
+  precise. A dispatch, an allocation or a trap behaves exactly as if the whole
+  method were hand-written C.
+- **Backends.** Inline C is native-only. The bytecode VM traps if an image
+  containing a block is executed, and `run --native` refuses to fall back to
+  the VM when no host C compiler is present -- there is nothing to fall back
+  *to*. Programs with inline blocks are therefore exercised by the native
+  golden and build harnesses only (`tests/integration/native/`); there is no
+  differential test, because the two backends disagree by design.
+- **Trust.** The block is inserted verbatim and is not checked by Khudra. A bug
+  in it is a bug in the lowered C: it can read or write anything in the image's
+  reach, crash the process, or leak memory. `kbc` images also carry the text,
+  so an untrusted `.kbc` can run arbitrary C when executed with `--native`.
+  This is the same trust boundary as `docs/roadmap.md`'s FFI, only the seam is
+  the source text instead of a symbol.
+
+### 5.2 Inline asm
+
+`inline_asm { ... }` has the same shape and spirit as `inline_c`: the body is
+spliced verbatim into the emitted translation unit, but as the guts of a
+GCC/Clang **extended asm** statement:
+
+```c
+__asm__ volatile(
+        <body>
+    );
+```
+
+The lowered statement is `volatile` and side-effect-only -- it may clobber
+registers and memory (which is why the closing `"memory"` appears in every
+example), but it is never a safepoint: the surrounding operand stack is already
+in its registers or frame slots, and no allocation or call can be happening
+*inside* assembly. The named locals of the enclosing method are in scope as the
+same `KhuValue* const` aliases as for `inline_c`, so an extended asm block can
+read and write a local through its memory operands:
+
+```khudra
+int32 x = 0;
+inline_asm {
+    "movb %2, %0\n\t"
+    "movq %3, %1\n\t"
+    : "=m"(x->tag), "=m"(x->v.as_int)      // output operands: frame slots
+    : "i"(KHU_T_INT32), "i"(42)            // input operands
+    : "memory"
+}
+io.printLine(x);   // 42
+```
+
+Everything section 5.1 says about placement, aliases and trust applies
+unchanged. The block is **architecture-specific**: it is passed straight to the
+host assembler, so `inline_asm { "nop" }` is about the only body that is
+portable across x86-64 and ARM. Reserved-name collisions are skipped exactly as
+for `inline_c`, and the bytecode VM and the no-compiler fallback treat an
+`inline_asm` image identically to an `inline_c` one.
 
 ## 6. Expressions
 

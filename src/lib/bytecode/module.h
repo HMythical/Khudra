@@ -18,7 +18,10 @@ namespace khu::bytecode {
 
 constexpr char kMagic[4] = {'K', 'H', 'U', 'B'};
 constexpr std::uint16_t kVersionMajor = 1;
-constexpr std::uint16_t kVersionMinor = 2;
+// 1.2 -> 1.3: MethodEntry gains its locals table, and the module gains a flags
+// word. Older images load as before: only the major version is checked, and the
+// new fields are written so an unpresent table/flag reads as empty.
+constexpr std::uint16_t kVersionMinor = 3;
 
 // One typed entry in the constant pool. Integer constants keep their width so
 // the VM never has to guess one.
@@ -84,6 +87,7 @@ enum MethodFlags : std::uint32_t {
     kMethodConstructor = 1u << 2,
     kMethodProcedures = 1u << 3,
     kMethodFieldInit = 1u << 4,
+    kMethodHasInline = 1u << 5,  // code contains InlineC opcodes (native-only)
 };
 
 // Maps a code offset back to a source position, for VM stack traces.
@@ -108,9 +112,20 @@ struct MethodEntry {
     std::uint32_t source_file = 0;
     util::Array<std::uint8_t> code;
     util::Array<LineEntry> lines;
+    // Frame-slot -> constant-pool index for the names an inline block can see.
+    // Params come first, then locals in declaration order; a slot whose name is
+    // not inlinable (a C keyword, or a collision with the backend's own
+    // identifiers) is 0xffffffffu. Only present when kMethodHasInline is set.
+    util::Array<std::uint32_t> locals;
 
     bool is_static() const { return (flags & kMethodStatic) != 0; }
     bool is_native() const { return (flags & kMethodNative) != 0; }
+    bool has_inline() const { return (flags & kMethodHasInline) != 0; }
+};
+
+// Bits in Module::flags.
+enum ModuleFlags : std::uint32_t {
+    kModuleHasInline = 1u << 0,  // some method contains InlineC (native-only)
 };
 
 class Module {
@@ -121,6 +136,9 @@ public:
     std::int32_t main_method = -1;
     std::int32_t root_class = -1;
     std::uint32_t source_file = 0;  // constant-pool index of the source path
+    std::uint32_t flags = 0;
+
+    bool has_inline() const { return (flags & kModuleHasInline) != 0; }
 
     // Interning: repeated names and literals share one entry.
     std::uint32_t intern_string(std::string_view text);

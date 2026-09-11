@@ -296,6 +296,18 @@ void PrettyPrinter::emit_statement(const ast::Stmt* statement) {
             out_.append_line(");");
             break;
         }
+
+        case ast::StmtKind::InlineC: {
+            const auto& decl = *static_cast<const ast::InlineCStmt*>(statement);
+            out_.indent(depth_).append("inline_c ").append(decl.text).append_line();
+            break;
+        }
+
+        case ast::StmtKind::InlineAsm: {
+            const auto& decl = *static_cast<const ast::InlineAsmStmt*>(statement);
+            out_.indent(depth_).append("inline_asm ").append(decl.text).append_line();
+            break;
+        }
     }
 }
 
@@ -612,6 +624,12 @@ bool equal_stmt(const ast::Stmt* left, const ast::Stmt* right) {
             const auto& b = *static_cast<const ast::FreeStmt*>(right);
             return a.is_dispose == b.is_dispose && equal_expr(a.target, b.target);
         }
+        case ast::StmtKind::InlineC:
+            return static_cast<const ast::InlineCStmt*>(left)->body ==
+                   static_cast<const ast::InlineCStmt*>(right)->body;
+        case ast::StmtKind::InlineAsm:
+            return static_cast<const ast::InlineAsmStmt*>(left)->body ==
+                   static_cast<const ast::InlineAsmStmt*>(right)->body;
     }
     return false;
 }

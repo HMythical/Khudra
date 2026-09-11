@@ -1,0 +1,6 @@
+bring khu::stdlib;
+public class Bad {
+    func main() {
+        int32 x = 0;
+        inline_c {
+            if (x) { /* ok, but never closed */

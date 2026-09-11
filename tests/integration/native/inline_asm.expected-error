@@ -1,0 +1,1 @@
+inline_asm is native-only: this image has raw assembly blocks and cannot run on the bytecode VM

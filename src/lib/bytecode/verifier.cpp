@@ -137,6 +137,28 @@ private:
                 break;
             }
 
+            case Op::InlineC: {
+                std::uint16_t index = read_u16(operand);
+                if (index >= module_.constants.size()) {
+                    fail(offset, "inline_c names constant #" + std::to_string(index) +
+                                     ", which does not exist");
+                } else if (module_.constants[index].tag != TypeTag::String) {
+                    fail(offset, "inline_c does not name a string constant");
+                }
+                break;
+            }
+
+            case Op::InlineAsm: {
+                std::uint16_t index = read_u16(operand);
+                if (index >= module_.constants.size()) {
+                    fail(offset, "inline_asm names constant #" + std::to_string(index) +
+                                     ", which does not exist");
+                } else if (module_.constants[index].tag != TypeTag::String) {
+                    fail(offset, "inline_asm does not name a string constant");
+                }
+                break;
+            }
+
             case Op::Materialize:
             case Op::Alloc:
             case Op::ManualAlloc: {
@@ -257,6 +279,16 @@ bool verify(const Module& module, util::Array<VerificationError>& errors) {
         if (method.param_count > method.frame_size) {
             errors.push(VerificationError{static_cast<std::int32_t>(i), 0,
                                           "declares more parameters than it has frame slots"});
+        }
+        if (method.has_inline()) {
+            if (method.locals.size() > method.frame_size) {
+                errors.push(VerificationError{static_cast<std::int32_t>(i), 0,
+                                              "has an inline locals table larger than its "
+                                              "frame"});
+            }
+        } else if (!method.locals.empty()) {
+            errors.push(VerificationError{static_cast<std::int32_t>(i), 0,
+                                          "has an inline locals table but no inline blocks"});
         }
         MethodVerifier(module, static_cast<std::int32_t>(i), method, errors).run();
     }

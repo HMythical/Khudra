@@ -149,6 +149,12 @@ enum class OperandFormat : std::uint8_t {
        -- but a null pointer traps. */                                        \
     X(PtrGet,       "ptrget",        OperandFormat::Type)                  \
     X(PtrSet,       "ptrset",        OperandFormat::Type)                  \
+/* native-only escape hatch: the operand is a constant-pool index of the   \
+        raw C text. The VM traps; only the native backend executes it. */      \
+    X(InlineC,      "inclinec",      OperandFormat::U16)                   \
+    /* the asm sibling of inline_c: the operand names the text that becomes   \
+        the guts of a `__asm__ volatile(...)` statement. */                   \
+    X(InlineAsm,    "inlineasm",     OperandFormat::U16)                   \
     /* termination */                                                      \
     X(Halt,         "halt",          OperandFormat::None)
 

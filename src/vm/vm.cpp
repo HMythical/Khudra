@@ -1025,6 +1025,17 @@ bool Vm::execute(Frame& frame, Value& result) {
                 break;
             }
 
+            case Op::InlineC:
+                // A native-only escape hatch (docs/spec.md, Inline blocks): the
+                // interpreter refuses the image rather than guessing what the
+                // C text was going to do.
+                return trap("inline_c is native-only: this image has raw C "
+                            "blocks and cannot run on the bytecode VM");
+
+            case Op::InlineAsm:
+                return trap("inline_asm is native-only: this image has raw "
+                            "assembly blocks and cannot run on the bytecode VM");
+
             case Op::Halt:
                 return true;
 

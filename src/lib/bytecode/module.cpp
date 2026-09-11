@@ -220,6 +220,7 @@ std::string serialize(const Module& module) {
     put_u32(out, module.source_file);
     put_i32(out, module.main_method);
     put_i32(out, module.root_class);
+    put_u32(out, module.flags);
 
     put_u32(out, static_cast<std::uint32_t>(module.constants.size()));
     for (const Constant& entry : module.constants) {
@@ -283,6 +284,9 @@ std::string serialize(const Module& module) {
             put_u32(out, line.line);
             put_u32(out, line.column);
         }
+
+        put_u32(out, static_cast<std::uint32_t>(entry.locals.size()));
+        for (std::uint32_t slot : entry.locals) put_u32(out, slot);
     }
 
     return out;
@@ -303,10 +307,14 @@ bool deserialize(std::string_view bytes, Module& out, std::string& error) {
                 std::to_string(kVersionMajor) + ".x)";
         return false;
     }
+    // 1.3 added the module flags word and the per-method locals table. A 1.2
+    // image simply predates both, so they read as absent.
+    const bool has_1_3_fields = minor >= 3;
 
     out.source_file = reader.u32();
     out.main_method = reader.i32();
     out.root_class = reader.i32();
+    if (has_1_3_fields) out.flags = reader.u32();
 
     std::uint32_t constant_count = reader.u32();
     for (std::uint32_t i = 0; i < constant_count && reader.ok(); ++i) {
@@ -381,6 +389,12 @@ bool deserialize(std::string_view bytes, Module& out, std::string& error) {
             line.line = reader.u32();
             line.column = reader.u32();
             entry.lines.push(line);
+        }
+        if (has_1_3_fields) {
+            std::uint32_t local_count = reader.u32();
+            for (std::uint32_t l = 0; l < local_count && reader.ok(); ++l) {
+                entry.locals.push(reader.u32());
+            }
         }
         out.methods.push(std::move(entry));
     }

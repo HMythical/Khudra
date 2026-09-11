@@ -68,6 +68,7 @@ private:
 
     ast::BlockStmt* parse_block();
     ast::Stmt* parse_statement();
+    ast::Stmt* parse_inline_block(TokenKind keyword, diag::SourceLocation start);
     ast::VarDeclStmt* parse_local(ast::Visibility visibility, bool explicit_visibility,
                                   diag::SourceLocation start);
 

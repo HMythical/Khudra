@@ -173,6 +173,26 @@ emits `materialize`.
 
 `halt` stops the interpreter.
 
+### Raw code
+
+| Instruction | Operands |
+|---|---|
+| `inlinec` | u16 constant index |
+| `inlineasm` | u16 constant index |
+
+`inlinec` splices the string constant it names into the C translation unit the
+native backend emits, at this point in the method (`docs/native.md`,
+section 4). It counts as an instruction boundary like any other, and the
+constant must be a string -- the verifier enforces both. The bytecode VM
+refuses to execute an image that contains one: raw C has no interpreter
+representation, so the opcode's only semantics are "the native backend runs
+this text" (see `docs/spec.md`, section 5.1).
+
+`inlineasm` is the sibling: the named string becomes the guts of a
+`__asm__ volatile(...)` statement in the emitted translation unit instead of
+straight-line C. Same operand, same boundary, same verifier rule, same VM
+refusal (`docs/spec.md`, section 5.2). Both set the module's inline flag.
+
 ## 3.1 Object layout
 
 An object is an `ObjectHeader` followed by one tagged `Value` per field slot:
@@ -207,6 +227,7 @@ version      major u16, minor u16
 source_file  u32   constant index of the source path
 main_method  i32   -1 when there is none
 root_class   i32   -1 when there is none
+flags        u32   module-wide flags (1.3+; absent before that)
 
 constants    u32 count, then per entry:
                tag u8
@@ -228,6 +249,9 @@ methods      u32 count, then per method:
                param_count u8, frame_size u16, return_type u8, native_id u32
                code   u32 length + bytes
                lines  u32 count, then (offset u32, line u32, column u32)
+               locals u32 count, then u32 constant index per frame slot
+                      (1.3+; absent before that, and only meaningful when
+                      the method carries the inline flag)
 ```
 
 `field_init` names a synthetic method holding the class's field initializers;
@@ -238,6 +262,14 @@ block and the constructor receive the same ones.
 `ref_kind` is 0 raw, 1 managed-ref, 2 manual-ref -- the reference map the
 collector traces through and the pin bookkeeping uses
 (`docs/memory-model.md`). `flags` on a class is bit0 = GC, bit1 = manual.
+
+The **module flags** word is bit0 = some method contains `inlinec` blocks. A
+method's own flags carry bit5 = `kMethodHasInline` for the same image, and its
+**locals table** then names one frame slot per entry -- parameters first, then
+locals in declaration order -- by constant index, `0xffffffffu` when a slot's
+name is not an identifier the native emitter may use. Version 1.3 introduced
+the flags word and the table; a 1.2 image predates both and reads them as
+absent, which the deserializer keys off the minor version.
 
 The **line table** maps a code offset back to a source position. The VM uses it
 for runtime error messages and stack traces:

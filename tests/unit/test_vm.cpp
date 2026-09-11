@@ -585,3 +585,25 @@ KHU_TEST(codegen, emits_materialize_with_the_resolved_strategy) {
     KHU_CHECK_CONTAINS(listing, ", standard    ; Node");
     KHU_CHECK_CONTAINS(listing, ", manual    ; Node");
 }
+
+KHU_TEST(vm, refuses_to_run_raw_inline_c) {
+    RunResult result =
+        run_source(program("        inline_c { /* a raw C block */ }\n"));
+    if (!result.compiled) {
+        KHU_FAIL("did not compile:\n" + result.diagnostics);
+        return;
+    }
+    KHU_CHECK(!result.ran);
+    KHU_CHECK_CONTAINS(result.runtime_error, "inline_c is native-only");
+}
+
+KHU_TEST(vm, refuses_to_run_raw_inline_asm) {
+    RunResult result =
+        run_source(program("        inline_asm { \"nop\" }\n"));
+    if (!result.compiled) {
+        KHU_FAIL("did not compile:\n" + result.diagnostics);
+        return;
+    }
+    KHU_CHECK(!result.ran);
+    KHU_CHECK_CONTAINS(result.runtime_error, "inline_asm is native-only");
+}

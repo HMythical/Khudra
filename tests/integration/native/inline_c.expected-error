@@ -1,0 +1,1 @@
+inline_c is native-only: this image has raw C blocks and cannot run on the bytecode VM

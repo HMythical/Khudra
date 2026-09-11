@@ -282,6 +282,13 @@ void Checker::check_stmt(ast::Stmt* statement) {
         case ast::StmtKind::Free:
             check_free(*static_cast<ast::FreeStmt*>(statement));
             break;
+
+        case ast::StmtKind::InlineC:
+        case ast::StmtKind::InlineAsm:
+            // The block is opaque C or asm; there is nothing to type-check.
+            // Frame layout is unaffected: it neither reads nor assigns any
+            // Khudra-visible binding except through the frame slots.
+            break;
     }
 }
 

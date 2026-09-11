@@ -126,6 +126,10 @@ std::string disassemble_instruction(const Module& module, const MethodEntry& met
                 if (const ClassEntry* target = module.class_at(value)) {
                     out.append("    ; ").append(module.string_at(target->name));
                 }
+            } else if (op == Op::InlineC) {
+                out.append("    ; inline_c ").append(module.string_at(value));
+            } else if (op == Op::InlineAsm) {
+                out.append("    ; inline_asm ").append(module.string_at(value));
             }
             break;
         }

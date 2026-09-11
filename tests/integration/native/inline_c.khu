@@ -1,0 +1,28 @@
+// The inline_c statement splices raw C into the native backend's lowered
+// method (docs/spec.md, section on inline blocks). Named locals are exposed to
+// that C text as `KhuValue* const` aliases, so C can read and write them. The
+// bytecode VM cannot execute raw C -- this program traps there by design, and
+// the native driver refuses to fall back when no host C compiler exists.
+bring khu::stdlib;
+
+public class InlineC {
+    func bump(int32 value) {
+        int32 load = 0;
+        int32 store = value;
+        inline_c {
+            // `load` and `store` are KhuValue* aliases into this method's
+            // frame. Read through the pointer, normalize the result to an
+            // int32, and write it back -- no VM plumbing involved.
+            *load = khu_normalize_int(KHU_T_INT32, load->v.as_int + 1);
+            *store = khu_normalize_int(KHU_T_INT32, store->v.as_int + load->v.as_int);
+        }
+        io.printLine(load);
+        io.printLine(store);
+        io.printLine(khuStdMath.add(load, store));
+    }
+
+    func main() {
+        this.bump(40);
+        this.bump(7);
+    }
+}

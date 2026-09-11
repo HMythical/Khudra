@@ -298,3 +298,65 @@ KHU_TEST(parser, recovers_and_still_sees_later_classes) {
     KHU_CHECK_EQ(unit->classes.size(), static_cast<std::size_t>(2));
     KHU_CHECK_EQ(std::string(unit->classes[1]->name), std::string("Fine"));
 }
+
+KHU_TEST(parser, parses_an_inline_c_statement) {
+    Compiler compiler;
+    auto* unit = parse(compiler,
+                       "public class A {\n"
+                       "    func go() {\n"
+                       "        int32 x = 0;\n"
+                       "        inline_c {\n"
+                       "            x = 1;\n"
+                       "        }\n"
+                       "        io.printLine(x);\n"
+                       "    }\n"
+                       "}\n");
+    KHU_CHECK(!compiler.diagnostics().has_errors());
+
+    const auto* body = unit->classes[0]->members[0]->as<ast::MethodDecl>()->body;
+    const auto* block = body->statements[1]->as<ast::InlineCStmt>();
+    KHU_CHECK(block != nullptr);
+    // `text` is the full brace-delimited span; `body` is what sits between the
+    // braces, so a re-print round-trips the raw text exactly.
+    KHU_CHECK_EQ(block->text.front(), '{');
+    KHU_CHECK_EQ(block->text.back(), '}');
+    KHU_CHECK_CONTAINS(std::string(block->body), "x = 1;");
+    KHU_CHECK_EQ(block->body.size() + 2, block->text.size());
+}
+
+KHU_TEST(parser, rejects_inline_c_without_an_open_brace) {
+    Compiler compiler;
+    parse(compiler, "public class A {\n    func go() {\n        inline_c\n    }\n}\n");
+    KHU_CHECK(compiler.diagnostics().has_errors());
+    KHU_CHECK_CONTAINS(compiler.diagnostics().render(),
+                       "expected '{' to open an inline C block");
+}
+
+KHU_TEST(parser, parses_an_inline_asm_statement) {
+    Compiler compiler;
+    auto* unit = parse(compiler,
+                       "public class A {\n"
+                       "    func go() {\n"
+                       "        inline_asm {\n"
+                       "            \"nop\"\n"
+                       "        }\n"
+                       "    }\n"
+                       "}\n");
+    KHU_CHECK(!compiler.diagnostics().has_errors());
+
+    const auto* body = unit->classes[0]->members[0]->as<ast::MethodDecl>()->body;
+    const auto* block = body->statements[0]->as<ast::InlineAsmStmt>();
+    KHU_CHECK(block != nullptr);
+    KHU_CHECK_EQ(block->text.front(), '{');
+    KHU_CHECK_EQ(block->text.back(), '}');
+    KHU_CHECK_CONTAINS(std::string(block->body), "\"nop\"");
+    KHU_CHECK_EQ(block->body.size() + 2, block->text.size());
+}
+
+KHU_TEST(parser, rejects_inline_asm_without_an_open_brace) {
+    Compiler compiler;
+    parse(compiler, "public class A {\n    func go() {\n        inline_asm\n    }\n}\n");
+    KHU_CHECK(compiler.diagnostics().has_errors());
+    KHU_CHECK_CONTAINS(compiler.diagnostics().render(),
+                       "expected '{' to open an inline asm block");
+}

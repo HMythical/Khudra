@@ -68,6 +68,18 @@ int execute_native(const khu::bytecode::Module& module, const Options& options) 
         case khu::native::NativeStatus::Ok:
             return exit_code;
         case khu::native::NativeStatus::NoCompiler:
+            if (module.has_inline()) {
+                // There is nothing to fall back to: an inline block is raw C
+                // or asm and only the native backend can run it
+                // (docs/spec.md, section 5.1).
+                std::fprintf(stderr,
+                             "khudra: %s: this image contains inline blocks "
+                             "(inline_c / inline_asm), which are native-only, "
+                             "but no host C compiler (cc, clang or gcc) was "
+                             "found\n",
+                             options.input.c_str());
+                return 1;
+            }
             std::fprintf(stderr,
                          "khudra: %s: no host C compiler (cc, clang or gcc) was found, so "
                          "--native falls back to the bytecode VM\n",

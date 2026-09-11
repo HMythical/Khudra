@@ -730,6 +730,9 @@ ast::Stmt* Parser::parse_statement() {
         return statement;
     }
 
+    if (check(TokenKind::KwInlineC)) return parse_inline_block(TokenKind::KwInlineC, start);
+    if (check(TokenKind::KwInlineAsm)) return parse_inline_block(TokenKind::KwInlineAsm, start);
+
     if (at_local_declaration()) {
         return parse_local(ast::Visibility::Private, false, start);
     }
@@ -741,6 +744,33 @@ ast::Stmt* Parser::parse_statement() {
     }
     expect(TokenKind::Semicolon, "after an expression statement");
     return arena_.create<ast::ExprStmt>(start, expr);
+}
+
+ast::Stmt* Parser::parse_inline_block(TokenKind keyword, diag::SourceLocation start) {
+    advance();
+    if (check(TokenKind::RawBlock)) {
+        const Token& block = current();
+        advance();
+        // The lexer keeps the whole span, braces included, so reparsing the
+        // printed source rebuilds the same tree.
+        std::string_view full = block.text;
+        std::string_view body =
+            full.size() >= 2 ? full.substr(1, full.size() - 2) : std::string_view();
+        if (keyword == TokenKind::KwInlineAsm) {
+            return arena_.create<ast::InlineAsmStmt>(start, full, body);
+        }
+        return arena_.create<ast::InlineCStmt>(start, full, body);
+    }
+    if (check(TokenKind::Invalid) && current().text.size() >= 2 && current().text.front() == '{') {
+        // The lexer already reported the unterminated block; swallow it so it
+        // does not cascade into a second diagnostic.
+        advance();
+        return nullptr;
+    }
+    error_at(current(), keyword == TokenKind::KwInlineAsm
+                           ? "expected '{' to open an inline asm block"
+                           : "expected '{' to open an inline C block");
+    return nullptr;
 }
 
 ast::VarDeclStmt* Parser::parse_local(ast::Visibility visibility, bool explicit_visibility,

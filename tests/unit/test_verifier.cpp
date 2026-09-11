@@ -221,3 +221,114 @@ KHU_TEST(verifier, survives_a_truncated_image_on_disk) {
         (void)verify(reloaded, report);
     }
 }
+
+namespace {
+
+// Builds a module whose `go` method contains an inline_c statement.
+bool build_inline_module(Module& out) {
+    khu::Compiler compiler;
+    std::uint32_t file = compiler.add_buffer(
+        "i.khu",
+        "public class I {\n"
+        "    func go() {\n"
+        "        int32 x = 0;\n"
+        "        inline_c { x = 1; }\n"
+        "        io.printLine(x);\n"
+        "    }\n"
+        "}\n");
+    return compiler.compile(file, out);
+}
+
+}  // namespace
+
+KHU_TEST(verifier, accepts_the_compiler_produced_inline_image) {
+    Module module;
+    KHU_CHECK(build_inline_module(module));
+    KHU_CHECK(module.has_inline());
+    std::string report;
+    KHU_CHECK(verify(module, report));
+    KHU_CHECK_EQ(report, std::string(""));
+}
+
+KHU_TEST(verifier, rejects_an_inline_locals_table_larger_than_the_frame) {
+    Module module;
+    if (!build_module(module)) return;
+    MethodEntry* main = find_method(module, "main");
+    if (!main) return;
+
+    main->flags |= kMethodHasInline;
+    for (std::uint32_t i = 0; i <= main->frame_size; ++i) main->locals.push(0xffffffffu);
+    KHU_CHECK_CONTAINS(report_for(module), "inline locals table larger than its frame");
+}
+
+KHU_TEST(verifier, rejects_inline_locals_without_an_inline_flag) {
+    Module module;
+    if (!build_module(module)) return;
+    MethodEntry* main = find_method(module, "main");
+    if (!main) return;
+
+    main->locals.push(0xffffffffu);
+    KHU_CHECK_CONTAINS(report_for(module), "inline locals table but no inline blocks");
+}
+
+KHU_TEST(verifier, rejects_an_inline_operand_that_is_not_a_string) {
+    Module module;
+    if (!build_inline_module(module)) return;
+    MethodEntry* go = find_method(module, "go");
+    if (!go) return;
+
+    // Point the InlineC operand at an integer constant instead of the raw C
+    // text that the image must carry.
+    std::uint32_t number = module.intern_int(TypeTag::Int32, 1234567);
+    for (std::size_t i = 0; i + 2 < go->code.size(); ++i) {
+        if (static_cast<Op>(go->code[i]) != Op::InlineC) continue;
+        go->code[i + 1] = static_cast<std::uint8_t>(number & 0xff);
+        go->code[i + 2] = static_cast<std::uint8_t>((number >> 8) & 0xff);
+        break;
+    }
+    KHU_CHECK_CONTAINS(report_for(module), "inline_c does not name a string constant");
+}
+
+namespace {
+
+// Builds a module whose `go` method contains an inline_asm statement.
+bool build_inline_asm_module(Module& out) {
+    khu::Compiler compiler;
+    std::uint32_t file = compiler.add_buffer(
+        "a.khu",
+        "public class A {\n"
+        "    func go() {\n"
+        "        int32 x = 0;\n"
+        "        inline_asm { \"nop\" }\n"
+        "        io.printLine(x);\n"
+        "    }\n"
+        "}\n");
+    return compiler.compile(file, out);
+}
+
+}  // namespace
+
+KHU_TEST(verifier, accepts_the_compiler_produced_inline_asm_image) {
+    Module module;
+    KHU_CHECK(build_inline_asm_module(module));
+    KHU_CHECK(module.has_inline());
+    std::string report;
+    KHU_CHECK(verify(module, report));
+    KHU_CHECK_EQ(report, std::string(""));
+}
+
+KHU_TEST(verifier, rejects_an_inline_asm_operand_that_is_not_a_string) {
+    Module module;
+    if (!build_inline_asm_module(module)) return;
+    MethodEntry* go = find_method(module, "go");
+    if (!go) return;
+
+    std::uint32_t number = module.intern_int(TypeTag::Int32, 1234567);
+    for (std::size_t i = 0; i + 2 < go->code.size(); ++i) {
+        if (static_cast<Op>(go->code[i]) != Op::InlineAsm) continue;
+        go->code[i + 1] = static_cast<std::uint8_t>(number & 0xff);
+        go->code[i + 2] = static_cast<std::uint8_t>((number >> 8) & 0xff);
+        break;
+    }
+    KHU_CHECK_CONTAINS(report_for(module), "inline_asm does not name a string constant");
+}

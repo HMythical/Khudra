@@ -263,6 +263,53 @@ function(khu_add_golden prefix golden)
         ${golden_dir}/${golden_name}.expected-err)
 endfunction()
 
+# Registers a program that only the native backend can run. A program with an
+# inline_c block splices raw C in and traps on the bytecode VM by design, so
+# there is no VM golden and no differential -- the same .expected file drives
+# `run --native` and a `khudra build` binary.
+function(khu_add_native_only prefix golden)
+    get_filename_component(golden_name "${golden}" NAME_WE)
+    get_filename_component(golden_dir "${golden}" DIRECTORY)
+    set(name "${prefix}${golden_name}")
+    add_test(
+        NAME golden_native_${name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${golden}
+            -DEXPECTED=${golden_dir}/${golden_name}.expected
+            -DEXPECTED_ERR=${golden_dir}/${golden_name}.expected-err
+            -DBACKEND=native
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_golden.cmake)
+    add_test(
+        NAME build_${name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${golden}
+            -DEXPECTED=${golden_dir}/${golden_name}.expected
+            -DEXPECTED_ERR=${golden_dir}/${golden_name}.expected-err
+            -DOUTPUT=${KHU_NATIVE_TEST_BIN}/build_${name}
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_build.cmake)
+endfunction()
+
+# Inline-only goldens (docs/spec.md, inline blocks): exercised on the native
+# backend only. Re-running the bytecode VM over one of them is exactly the
+# failure the feature promises, so the harness does not compare the two.
+file(GLOB KHU_NATIVE_ONLY_TESTS CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/tests/integration/native/*.khu")
+foreach(golden ${KHU_NATIVE_ONLY_TESTS})
+    khu_add_native_only("native_" "${golden}")
+    get_filename_component(golden_name "${golden}" NAME_WE)
+    get_filename_component(golden_dir "${golden}" DIRECTORY)
+    add_test(
+        NAME traps_vm_${golden_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DKHUDRA=$<TARGET_FILE:khudra>
+            -DSOURCE=${golden}
+            -DEXPECTED=${golden_dir}/${golden_name}.expected-error
+            -DRUN_ARGS=run
+            -P ${CMAKE_SOURCE_DIR}/tests/integration/run_runtime_error.cmake)
+endforeach()
+
 # The top-level goldens, plus the per-namespace standard-library goldens that
 # PLAN.md puts under tests/integration/stdlib/. Both are picked up without
 # editing this file.
