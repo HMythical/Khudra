@@ -1184,3 +1184,212 @@ KHU_TEST(native_diff, opcodes_no_khudra_program_emits) {
 
     check_module_identical(module);
 }
+
+// ---------------------------------------------------------------------------
+// Inline C: the statement splices raw text into the native lowering, so there
+// is no bytecode-VM equivalent to compare against. The tests pin the emitted
+// aliases and text, and -- where a host compiler exists -- that the native
+// backend runs the block and the VM refuses it.
+// ---------------------------------------------------------------------------
+
+KHU_TEST(native_emit, splices_inline_c_and_aliases_the_locals) {
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    if (!compile_source(program("        int32 value = 0;\n"
+                                "        inline_c {\n"
+                                "            *value = khu_normalize_int(KHU_T_INT32, value->v.as_int);\n"
+                                "        }\n"),
+                        module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    KHU_CHECK(module.has_inline());
+
+    khu::native::EmitResult emitted = khu::native::emit_c(module, khu::native::EmitOptions{});
+    KHU_CHECK_EQ(emitted.error, std::string());
+    KHU_CHECK_CONTAINS(emitted.source, "KhuValue* const value = &V[");
+    KHU_CHECK_CONTAINS(emitted.source, "/* inline_c */");
+    KHU_CHECK_CONTAINS(emitted.source, "khu_normalize_int(KHU_T_INT32, value->v.as_int);");
+}
+
+KHU_TEST(native_emit, skips_an_alias_that_collides_with_the_host_signature) {
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    // `out` is the emitted method's result pointer, so its alias must not be
+    // declared -- the inline text below reads the Khudra local through V[]
+    // instead, and the whole function must still compile.
+    if (!compile_source(program("        int32 out = 0;\n"
+                                "        inline_c {\n"
+                                "            V[0] = *out;\n"
+                                "        }\n"),
+                        module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    khu::native::EmitResult emitted = khu::native::emit_c(module, khu::native::EmitOptions{});
+    KHU_CHECK_EQ(emitted.error, std::string());
+    KHU_CHECK_CONTAINS(emitted.source, "/* inline_c */");
+    // The collision name does not become an alias; the frame still exists.
+    KHU_CHECK_CONTAINS(emitted.source, "KhuValue V[");
+    KHU_CHECK(emitted.source.find("KhuValue* const out") == std::string::npos);
+}
+
+KHU_TEST(native_emit, inline_c_compiles_under_a_strict_compiler_mode) {
+    std::string compiler = khu::native::find_c_compiler();
+    if (compiler.empty()) return;  // nothing to check on a machine with no cc
+
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    if (!compile_source(program("        int32 value = 0;\n"
+                                "        inline_c {\n"
+                                "            *value = khu_normalize_int(KHU_T_INT32, value->v.as_int + 1);\n"
+                                "        }\n"
+                                "        io.printLine(value);\n"),
+                        module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    khu::native::EmitResult emitted = khu::native::emit_c(module, khu::native::EmitOptions{});
+    KHU_CHECK_EQ(emitted.error, std::string());
+
+    khu::native::TempDir scratch;
+    if (!scratch.ok()) {
+        KHU_FAIL("cannot create a scratch directory");
+        return;
+    }
+    std::string path = scratch.file("inline.c");
+    scratch.track(path);
+    if (!khu::util::write_file(path, emitted.source)) {
+        KHU_FAIL("cannot write " + path);
+        return;
+    }
+    std::string report;
+    int status = khu::native::run_tool({compiler, "-std=c11", "-O1", "-Wall", "-Wextra",
+                                        "-Wpedantic", "-Werror", "-c", path, "-o", "/dev/null"},
+                                       report);
+    if (status != 0) KHU_FAIL("the emitted inline C did not compile cleanly:\n" + report);
+}
+
+KHU_TEST(native_inline, runs_raw_c_while_the_vm_refuses_it) {
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    const std::string source = program(
+        "        int32 x = 0;\n"
+        "        int32 y = 2;\n"
+        "        inline_c {\n"
+        "            *x = khu_normalize_int(KHU_T_INT32, x->v.as_int + y->v.as_int * 21);\n"
+        "        }\n"
+        "        io.printLine(x);\n");
+    if (!compile_source(source, module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    KHU_CHECK(module.has_inline());
+
+    // The bytecode VM will not execute raw C.
+    BackendRun vm = run_on_vm(module, {});
+    KHU_CHECK(!vm.ran);
+    KHU_CHECK_CONTAINS(vm.runtime_error, "native-only");
+
+    // The native backend splices the C in and gets exactly what it declared.
+    BackendRun native;
+    std::string backend_error;
+    if (!run_on_native(module, {}, native, backend_error)) return;  // no host compiler
+    KHU_CHECK(native.ran);
+    KHU_CHECK_EQ(native.error_output, std::string(""));
+    KHU_CHECK_EQ(native.output, std::string("42\n"));
+}
+
+KHU_TEST(native_emit, wraps_inline_asm_in_a_volatile_extended_asm_statement) {
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    if (!compile_source(program("        inline_asm {\n"
+                                "            \"nop\"\n"
+                                "        }\n"),
+                        module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    KHU_CHECK(module.has_inline());
+
+    khu::native::EmitResult emitted = khu::native::emit_c(module, khu::native::EmitOptions{});
+    KHU_CHECK_EQ(emitted.error, std::string());
+    KHU_CHECK_CONTAINS(emitted.source, "/* inline_asm */");
+    KHU_CHECK_CONTAINS(emitted.source, "__asm__ volatile(");
+    KHU_CHECK_CONTAINS(emitted.source, "\"nop\"");
+    KHU_CHECK_CONTAINS(emitted.source, ");");
+}
+
+KHU_TEST(native_inline, runs_asm_that_writes_a_local_through_its_alias) {
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    // x is a `KhuValue* const` alias into the frame; extended asm writes the
+    // Int32 tag and the 64-bit payload through its memory operands. The note
+    // that the emitted asm is volatile only holds when the text reaches the
+    // translation unit verbatim -- which is what this test pins.
+    const std::string source = program(
+        "        int32 x = 0;\n"
+        "        inline_asm {\n"
+        "            \"movb %2, %0\\n\\t\"\n"
+        "            \"movq %3, %1\\n\\t\"\n"
+        "            : \"=m\"(x->tag), \"=m\"(x->v.as_int)\n"
+        "            : \"i\"(KHU_T_INT32), \"i\"(42)\n"
+        "            : \"memory\"\n"
+        "        }\n"
+        "        io.printLine(x);\n");
+    if (!compile_source(source, module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    KHU_CHECK(module.has_inline());
+
+    // The bytecode VM will not execute raw asm.
+    BackendRun vm = run_on_vm(module, {});
+    KHU_CHECK(!vm.ran);
+    KHU_CHECK_CONTAINS(vm.runtime_error, "native-only");
+
+    BackendRun native;
+    std::string backend_error;
+    if (!run_on_native(module, {}, native, backend_error)) return;  // no host compiler
+    KHU_CHECK(native.ran);
+    KHU_CHECK_EQ(native.error_output, std::string(""));
+    KHU_CHECK_EQ(native.output, std::string("42\n"));
+}
+
+KHU_TEST(native_emit, inline_asm_compiles_under_a_strict_compiler_mode) {
+    std::string compiler = khu::native::find_c_compiler();
+    if (compiler.empty()) return;  // nothing to check on a machine with no cc
+
+    khu::bytecode::Module module;
+    std::string diagnostics;
+    if (!compile_source(program("        int32 value = 0;\n"
+                                "        inline_asm {\n"
+                                "            \"movb $0, %0\\n\\t\"\n"
+                                "            : \"=m\"(value->tag)\n"
+                                "            : : \"memory\"\n"
+                                "        }\n"
+                                "        io.printLine(value);\n"),
+                        module, diagnostics)) {
+        KHU_FAIL("did not compile:\n" + diagnostics);
+        return;
+    }
+    khu::native::EmitResult emitted = khu::native::emit_c(module, khu::native::EmitOptions{});
+    KHU_CHECK_EQ(emitted.error, std::string());
+
+    khu::native::TempDir scratch;
+    if (!scratch.ok()) {
+        KHU_FAIL("cannot create a scratch directory");
+        return;
+    }
+    std::string path = scratch.file("inline_asm.c");
+    scratch.track(path);
+    if (!khu::util::write_file(path, emitted.source)) {
+        KHU_FAIL("cannot write " + path);
+        return;
+    }
+    std::string report;
+    int status = khu::native::run_tool({compiler, "-std=c11", "-O1", "-Wall", "-Wextra",
+                                        "-Wpedantic", "-Werror", "-c", path, "-o", "/dev/null"},
+                                       report);
+    if (status != 0) KHU_FAIL("the emitted inline asm did not compile cleanly:\n" + report);
+}

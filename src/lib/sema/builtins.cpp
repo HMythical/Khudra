@@ -393,6 +393,37 @@ NativeBinding bind_runtime(std::string_view member_name, std::size_t arity) {
     return NativeBinding{};
 }
 
+// khuAdvKernel -- the shared half of the kernel tier. Every member here is
+// portable by design, which is what lets one set of bindings answer for all
+// three hosts: platform detection, the shared error slot, and the
+// buffer/address bridge. The per-OS members arrive with their own binders in
+// the phases that implement them (lib/kernel.khu, "What is here and what is
+// not").
+NativeBinding bind_kernel(std::string_view member_name, std::size_t arity) {
+    if (arity == 0) {
+        if (member_name == "platform") return to_native(Native::KernelPlatform);
+        if (member_name == "linux") return to_native(Native::KernelPlatformLinux);
+        if (member_name == "windows") return to_native(Native::KernelPlatformWindows);
+        if (member_name == "mac") return to_native(Native::KernelPlatformMac);
+        if (member_name == "platformName") return to_native(Native::KernelPlatformName);
+        if (member_name == "errno") return to_native(Native::KernelErrno);
+    }
+    if (arity == 1) {
+        if (member_name == "errorMessage") return to_native(Native::KernelErrorMessage);
+        if (member_name == "toAddress") return to_native(Native::KernelToAddress);
+        if (member_name == "dropAddress") return to_native(Native::KernelDropAddress);
+    }
+    if (arity == 2) {
+        if (member_name == "fromAddress") return to_native(Native::KernelFromAddress);
+    }
+    return NativeBinding{};
+}
+
+bool is_kernel_namespace(std::string_view namespace_name) {
+    return namespace_name == kKernelNamespace || namespace_name == kKernelLinuxNamespace ||
+           namespace_name == kKernelWindowsNamespace || namespace_name == kKernelMacNamespace;
+}
+
 NativeBinding resolve_native_binding(std::string_view namespace_name,
                                      std::string_view member_name, std::size_t arity) {
     if (namespace_name == kMathNamespace) return bind_math(member_name, arity);
@@ -406,6 +437,7 @@ NativeBinding resolve_native_binding(std::string_view namespace_name,
     if (namespace_name == kRandomNamespace) return bind_random(member_name, arity);
     if (namespace_name == kTimeNamespace) return bind_time(member_name, arity);
     if (namespace_name == kSystemNamespace) return bind_system(member_name, arity);
+    if (namespace_name == kKernelNamespace) return bind_kernel(member_name, arity);
     if (namespace_name == kRuntimeNamespace) return bind_runtime(member_name, arity);
     return NativeBinding{};
 }

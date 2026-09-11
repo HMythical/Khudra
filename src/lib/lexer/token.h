@@ -19,7 +19,8 @@ namespace khu::lexer {
     X(Identifier, "identifier")           \
     X(IntLiteral, "integer literal")      \
     X(FloatLiteral, "float literal")      \
-    X(StringLiteral, "string literal")
+    X(StringLiteral, "string literal")    \
+    X(RawBlock, "raw block")
 
 // Reserved type names. Aliases (i32, u8, byte, int) canonicalize in Sema.
 #define KHU_TOKEN_TYPE_KEYWORDS(X)                                  \
@@ -63,6 +64,8 @@ namespace khu::lexer {
     X(KwDispose, "dispose")                                         \
     X(KwManual, "manual")                                           \
     X(KwStandard, "standard")                                       \
+    X(KwInlineC, "inline_c")                                        \
+    X(KwInlineAsm, "inline_asm")                                    \
     KHU_TOKEN_TYPE_KEYWORDS(X)
 
 #define KHU_TOKEN_PUNCTUATION(X)                                    \

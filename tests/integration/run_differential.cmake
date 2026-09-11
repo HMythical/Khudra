@@ -1,24 +1,32 @@
 # Runs one program under every backend and asserts nothing observable differs.
 #
 #   cmake -DKHUDRA=<path> -DSOURCE=<file.khu> -DOUTPUT=<binary>
-#         -P run_differential.cmake
+#         [-DFLAGS="..."] -P run_differential.cmake
 #
 # No .expected file: the interpreter is the reference. stdout, stderr and the
 # exit code all have to agree, which is the invariant in docs/native.md, 5 --
 # and unlike a golden it holds for programs that trap, too.
+# FLAGS holds toolchain flags to insert before the source -- `--allow-kernel`
+# for the kernel goldens (PLAN.md, section 9.6).
 if(NOT DEFINED KHUDRA OR NOT DEFINED SOURCE OR NOT DEFINED OUTPUT)
     message(FATAL_ERROR "run_differential.cmake needs KHUDRA, SOURCE and OUTPUT")
 endif()
+
+if(NOT DEFINED FLAGS)
+    set(FLAGS "")
+endif()
+
+separate_arguments(flags_list UNIX_COMMAND "${FLAGS}")
 
 get_filename_component(output_dir "${OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_dir}")
 
 execute_process(
-    COMMAND "${KHUDRA}" run "${SOURCE}"
+    COMMAND "${KHUDRA}" run ${flags_list} "${SOURCE}"
     OUTPUT_VARIABLE vm_output ERROR_VARIABLE vm_errors RESULT_VARIABLE vm_code)
 
 execute_process(
-    COMMAND "${KHUDRA}" run --native "${SOURCE}"
+    COMMAND "${KHUDRA}" run --native ${flags_list} "${SOURCE}"
     OUTPUT_VARIABLE jit_output ERROR_VARIABLE jit_errors RESULT_VARIABLE jit_code)
 
 function(compare_backend name output errors code)
@@ -43,7 +51,7 @@ endfunction()
 compare_backend("run --native" "${jit_output}" "${jit_errors}" "${jit_code}")
 
 execute_process(
-    COMMAND "${KHUDRA}" build "${SOURCE}" -o "${OUTPUT}"
+    COMMAND "${KHUDRA}" build ${flags_list} "${SOURCE}" -o "${OUTPUT}"
     OUTPUT_VARIABLE build_output ERROR_VARIABLE build_errors RESULT_VARIABLE build_code)
 if(NOT build_code EQUAL 0)
     message(FATAL_ERROR

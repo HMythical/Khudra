@@ -55,7 +55,7 @@ sema::Program* Compiler::analyze(std::uint32_t file_id) {
 
     // Sema still runs after parse errors: recovery leaves a usable tree, and
     // reporting only the first syntax error would hide everything behind it.
-    sema::Checker checker(types_, diagnostics_, arena_);
+    sema::Checker checker(types_, diagnostics_, arena_, allow_kernel_);
     return checker.check(std::move(units), *unit);
 }
 

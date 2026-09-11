@@ -51,6 +51,10 @@ public:
     // stage reported an error.
     bool compile(std::uint32_t file_id, bytecode::Module& out);
 
+    // Grants the kernel tier: khuAdvKernel* calls are gated by default and
+    // only reach the checker with this on (PLAN.md, section 9.4).
+    void set_allow_kernel(bool v) { allow_kernel_ = v; }
+
     sema::TypeContext& types() { return types_; }
     ast::CompilationUnit* unit() { return unit_; }
 
@@ -68,6 +72,7 @@ private:
     ast::CompilationUnit* unit_ = nullptr;
     util::Array<ast::CompilationUnit*> stdlib_units_;
     bool stdlib_loaded_ = false;
+    bool allow_kernel_ = false;
 };
 
 }  // namespace khu

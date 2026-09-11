@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "bytecode/native.h"
+#include "vm/kernel/kernel.h"
 #include "vm/value.h"
 
 namespace khu::vm {
@@ -158,6 +159,12 @@ public:
     // and the pending exit request. Shared rather than mirrored, so the two
     // backends cannot answer differently.
     SystemServices system;
+
+    // Per-run state for khuAdvKernel: the spans of memory whose length this
+    // runtime knows, exactly the way `system` is the per-run state a native
+    // needs and nothing else does. The registry holds no OS resource and is
+    // discarded when the run ends (src/vm/kernel/kernel.h, KernelServices).
+    kernel::KernelServices kernel;
 
     // The deterministic PRNG's state (khuStdRandom). It lives here rather than
     // in either backend because it is per-run state a native needs and nothing

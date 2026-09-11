@@ -109,6 +109,11 @@ Token Lexer::scan_identifier() {
 
     Token token = make(TokenKind::Identifier, start, start_offset);
     token.kind = keyword_kind(token.text);
+    if (token.kind == TokenKind::KwInlineC || token.kind == TokenKind::KwInlineAsm) {
+        // The next token is the raw block, so its braces belong to the C or
+        // asm text, not to statement-block punctuation.
+        inline_block_pending_ = true;
+    }
     return token;
 }
 
@@ -249,8 +254,78 @@ Token Lexer::scan_string() {
     return token;
 }
 
+Token Lexer::scan_raw_block(diag::SourceLocation start) {
+    std::size_t start_offset = offset_;
+    advance();  // opening '{'
+
+    // The C text is spliced verbatim into the emitted translation unit, so the
+    // lexer only has to find the matching close brace. Braces inside string and
+    // character literals, and inside // and /* */ comments, do not count.
+    int depth = 1;
+    while (!at_end() && depth > 0) {
+        char c = peek();
+        if (c == '"' || c == '\'') {
+            advance();
+            const char quote = c;
+            while (!at_end()) {
+                char inner = peek();
+                if (inner == '\\') {
+                    advance();
+                    if (!at_end()) advance();
+                    continue;
+                }
+                advance();
+                if (inner == quote) break;
+                if (inner == '\n') break;  // an unterminated literal (illegal C)
+            }
+            continue;
+        }
+        if (c == '/' && peek(1) == '/') {
+            while (!at_end() && peek() != '\n') advance();
+            continue;
+        }
+        if (c == '/' && peek(1) == '*') {
+            advance();
+            advance();
+            while (!at_end() && !(peek() == '*' && peek(1) == '/')) advance();
+            if (!at_end()) {
+                advance();
+                advance();
+            }
+            continue;
+        }
+        if (c == '{') {
+            ++depth;
+            advance();
+            continue;
+        }
+        if (c == '}') {
+            --depth;
+            advance();
+            continue;
+        }
+        advance();
+    }
+
+    Token token = make(TokenKind::RawBlock, start, start_offset);
+    if (depth > 0) {
+        diagnostics_.error(start, "unterminated inline block: expected '}' to close it");
+        token.kind = TokenKind::Invalid;
+    }
+    return token;
+}
+
 Token Lexer::scan_token() {
     diag::SourceLocation start = here();
+
+    // `inline_c` was scanned a moment ago; its `{` opens a raw C block rather
+    // than a statement block, so the whole thing is one token.
+    if (inline_block_pending_ && peek() == '{') {
+        inline_block_pending_ = false;
+        return scan_raw_block(start);
+    }
+    inline_block_pending_ = false;
+
     std::size_t start_offset = offset_;
     char c = advance();
 

@@ -90,6 +90,37 @@ std::string quoted(const std::string& text) {
     return out;
 }
 
+// A C reserved word cannot be aliased, no matter how well-scoped the
+// declaration would be: `KhuValue* const int = &V[0];` is not C.
+bool is_c_keyword(std::string_view name) {
+    static const char* const kKeywords[] = {
+        "auto",   "break",     "case",     "char",   "const",     "continue",
+        "default", "do",       "double",   "else",   "enum",      "extern",
+        "float",  "for",       "goto",     "if",     "inline",    "int",
+        "long",   "register",  "restrict", "return", "short",     "signed",
+        "sizeof", "static",    "struct",   "switch", "typedef",   "union",
+        "unsigned", "void",    "volatile", "while",  "_Alignas",  "_Alignof",
+        "_Atomic", "_Bool",    "_Complex", "_Generic", "_Imaginary", "_Noreturn",
+        "_Static_assert", "_Thread_local",
+    };
+    for (const char* keyword : kKeywords) {
+        if (name == keyword) return true;
+    }
+    return false;
+}
+
+// A local whose name the emitted function itself uses cannot be aliased either:
+// the alias would shadow the parameter or collide with the frame plumbing. The
+// `khu_`/`KHU_` prefixes are the ABI's namespace and are off-limits too.
+bool is_reserved_inline_name(std::string_view name) {
+    if (name.empty()) return true;
+    if (is_c_keyword(name)) return true;
+    if (name == "self" || name == "argv" || name == "out" || name == "V" || name == "F") {
+        return true;
+    }
+    return name.substr(0, 4) == "khu_" || name.substr(0, 4) == "KHU_";
+}
+
 // How many values a native call leaves behind. The answer comes from the
 // shared table in bytecode/native.h rather than a second list here, so the
 // emitter's abstract stack cannot disagree with what the two backends do. An
@@ -156,6 +187,11 @@ private:
                  std::vector<State>& entry, std::vector<bool>& is_target, int& max_stack,
                  std::vector<char>& virtual_expects);
     bool emit_method(std::int32_t index, const bytecode::MethodEntry& method);
+
+    // Declares `KhuValue* const <name> = &V[slot];` for every frame slot the
+    // method's inline blocks may reference, so the raw C text can read and
+    // write the named locals of the Khudra method that contains it.
+    void emit_inline_aliases(const bytecode::MethodEntry& method);
 
     // Applies one instruction to the abstract state, and reports whether
     // control falls through it and whether it branches.
@@ -320,6 +356,12 @@ bool Emitter::step(const bytecode::MethodEntry& method, const Insn& insn, State&
 
     switch (insn.op) {
         case Op::Nop:
+            break;
+
+        case Op::InlineC:
+        case Op::InlineAsm:
+            // The raw text is opaque to the abstract stack: it neither reads
+            // nor pushes the operand stack, and frame layout is unchanged.
             break;
 
         case Op::Pop:
@@ -669,6 +711,18 @@ bool Emitter::analyze(const bytecode::MethodEntry& method, const std::vector<Ins
     return true;
 }
 
+void Emitter::emit_inline_aliases(const bytecode::MethodEntry& method) {
+    std::size_t count = method.locals.size();
+    if (count > method.frame_size) count = method.frame_size;
+    for (std::size_t slot = 0; slot < count; ++slot) {
+        std::uint32_t pool = method.locals[slot];
+        if (pool == 0xffffffffu) continue;
+        std::string_view name = module_.string_at(pool);
+        if (is_reserved_inline_name(name)) continue;
+        line("KhuValue* const " + std::string(name) + " = &V[" + decimal(slot) + "];");
+    }
+}
+
 bool Emitter::emit_method(std::int32_t index, const bytecode::MethodEntry& method) {
     std::vector<Insn> code;
     if (!decode(method, code)) return false;
@@ -697,6 +751,8 @@ bool Emitter::emit_method(std::int32_t index, const bytecode::MethodEntry& metho
     line("*out = khu_make_void();");
     line("khu_rt_frame_enter(&F, V, " + decimal(index) + "u, " + decimal(method.frame_size) +
          "u, " + decimal(slot_count) + "u, self, argv, " + decimal(method.param_count) + "u);");
+
+    if (method.has_inline()) emit_inline_aliases(method);
 
     for (std::size_t i = 0; i < code.size(); ++i) {
         const Insn& insn = code[i];
@@ -967,6 +1023,42 @@ bool Emitter::emit_method(std::int32_t index, const bytecode::MethodEntry& metho
                 line("if (khu_rt_pin(&F, " + stack_addr(depth - 1) + ", " +
                      (insn.op == Op::Pin ? "1" : "0") + ")) KHU_UNWIND(&F);");
                 break;
+
+            case Op::InlineC: {
+                if (insn.a >= module_.constants.size()) {
+                    fail("inline_c names constant #" + decimal(insn.a) +
+                         ", which does not exist");
+                    return false;
+                }
+                const std::string& text = module_.constants[insn.a].text;
+                // Publish the frame first: if the embedded C allocates (a
+                // safepoint scans V[0..F.height)) or traps, the host needs a
+                // precise position, exactly as for any other instruction.
+                publish();
+                out_ += "    /* inline_c */\n";
+                out_ += text;
+                if (text.empty() || text.back() != '\n') out_ += "\n";
+                break;
+            }
+
+            case Op::InlineAsm: {
+                if (insn.a >= module_.constants.size()) {
+                    fail("inline_asm names constant #" + decimal(insn.a) +
+                         ", which does not exist");
+                    return false;
+                }
+                const std::string& text = module_.constants[insn.a].text;
+                // The text is the guts of a GCC/Clang extended asm statement.
+                // It is volatile and may carry its own clobbers, so no operand
+                // stack or frame state can escape it; a trailing newline keeps
+                // the closing parenthesis off the last instruction line.
+                out_ += "    /* inline_asm */\n";
+                out_ += "    __asm__ volatile(";
+                out_ += text;
+                if (text.empty() || text.back() != '\n') out_ += "\n";
+                out_ += "    );\n";
+                break;
+            }
 
             case Op::Count:
                 fail("invalid opcode");

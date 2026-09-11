@@ -23,9 +23,12 @@
 // 700 - 799   khuStdMem           (Phase 8)
 // 800 - 849   khuStdRandom        (Phase 9)
 // 850 - 899   khuStdTime          (Phase 9)
-// 900 - 999   khuStdSystem        (Phase 9) -- the full block, not 900-949:
-//             tests/unit/test_natives.cpp grants the namespace everything up
-//             to kNativeBlockEnd - 1, and the v1 surface uses 46 of the 100.
+// 900 - 999   khuStdSystem        (Phase 9) -- tests/unit/test_natives.cpp
+//             grants the namespace everything up to kNativeBlockKernel - 1.
+// 1000 - 1099 khuAdvKernel        (shared) -- PLAN.md, section 6.1
+// 1100 - 1199 khuAdvKernelLinux   -- PLAN.md, section 6.2
+// 1200 - 1299 khuAdvKernelWindows -- PLAN.md, section 6.4
+// 1300 - 1399 khuAdvKernelMac     -- PLAN.md, section 6.3
 #ifndef KHU_BYTECODE_NATIVE_H
 #define KHU_BYTECODE_NATIVE_H
 
@@ -47,7 +50,11 @@ enum : std::uint32_t {
     kNativeBlockRandom = 800,
     kNativeBlockTime = 850,
     kNativeBlockSystem = 900,
-    kNativeBlockEnd = 1000,
+    kNativeBlockKernel = 1000,
+    kNativeBlockKernelLinux = 1100,
+    kNativeBlockKernelWindows = 1200,
+    kNativeBlockKernelMac = 1300,
+    kNativeBlockEnd = 1400,
 };
 
 // name, id, display name, number of results (0 or 1)
@@ -290,7 +297,22 @@ enum : std::uint32_t {
     X(SysLocalPort,      957, "khuStdSystem.localPort",     1)                 \
     X(SysSetReadTimeout, 958, "khuStdSystem.setReadTimeout", 0)                \
     X(SysResolveHost,    959, "khuStdSystem.resolveHost",   1)                 \
-    X(SysShutdown,       960, "khuStdSystem.shutdown",      0)
+    X(SysShutdown,       960, "khuStdSystem.shutdown",      0)                  \
+    /* khuAdvKernel -- the shared, portability-facing half of the kernel      \
+       access tier. It carries what the three per-OS namespaces have in       \
+       common: the platform branch, the shared error slot and the             \
+       buffer/address bridge. The per-OS tiers are khuAdvKernelLinux,         \
+       khuAdvKernelWindows and khuAdvKernelMac (lib/kernel.khu). */            \
+    X(KernelPlatform,     1000, "khuAdvKernel.platform",     1)                \
+    X(KernelPlatformLinux, 1001, "khuAdvKernel.linux",       1)                \
+    X(KernelPlatformWindows, 1002, "khuAdvKernel.windows",   1)                \
+    X(KernelPlatformMac,  1003, "khuAdvKernel.mac",          1)                \
+    X(KernelPlatformName, 1004, "khuAdvKernel.platformName", 1)                \
+    X(KernelErrno,        1005, "khuAdvKernel.errno",        1)                \
+    X(KernelErrorMessage, 1006, "khuAdvKernel.errorMessage", 1)                \
+    X(KernelToAddress,    1007, "khuAdvKernel.toAddress",    1)                \
+    X(KernelFromAddress,  1008, "khuAdvKernel.fromAddress",  1)                \
+    X(KernelDropAddress,  1009, "khuAdvKernel.dropAddress",  0)
 
 enum class NativeId : std::uint32_t {
     None = 0,

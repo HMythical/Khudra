@@ -1,0 +1,2 @@
+'khuAdvKernel.platform' is a direct kernel call, which this build did not allow
+compile or run it with --allow-kernel; a program that talks to the kernel

@@ -90,6 +90,20 @@ struct Value {
         return result;
     }
 
+    static Value null_pointer() {
+        Value result;
+        result.tag = TypeTag::Ptr;
+        result.as_raw = nullptr;
+        return result;
+    }
+
+    static Value make_pointer(void* block) {
+        Value result;
+        result.tag = TypeTag::Ptr;
+        result.as_raw = block;
+        return result;
+    }
+
     bool truthy() const { return as_uint != 0; }
     // `null` and a Ref with a null pointer both mean "not instantiated yet".
     bool is_null_reference() const {

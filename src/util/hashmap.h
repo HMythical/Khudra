@@ -70,6 +70,14 @@ public:
     std::size_t size() const { return count_; }
     bool empty() const { return count_ == 0; }
 
+    void clear() {
+        for (Entry& slot : slots_) {
+            if (slot.occupied) slot.key.clear();
+            slot.occupied = false;
+        }
+        count_ = 0;
+    }
+
     // Iteration visits occupied slots in unspecified order.
     template <typename Fn>
     void for_each(Fn&& fn) const {

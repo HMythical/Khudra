@@ -38,6 +38,8 @@ void print_usage(std::FILE* stream) {
                  "  --native             (run) execute through the native backend --\n"
                  "                       raw memory, no interpreter -- instead of the VM\n"
                  "  --keep-c             (build) keep the intermediate C translation unit\n"
+                 "  --allow-kernel       enable the khuAdvKernel* direct syscall libraries;\n"
+                 "                       off by default because portable programs never need them\n"
                  "  --dump-tokens        print the token stream\n"
                  "  --dump-ast           print the parsed AST\n"
                  "  -- <args...>         everything after this goes to the program,\n"
@@ -88,6 +90,8 @@ bool parse_arguments(int argc, char** argv, Options& options, std::string& error
             options.native = true;
         } else if (argument == "--keep-c") {
             options.keep_c = true;
+        } else if (argument == "--allow-kernel") {
+            options.allow_kernel = true;
         } else if (!argument.empty() && argument[0] == '-' && argument != "-") {
             error = "unknown option '" + std::string(argument) + "'";
             return false;
@@ -110,6 +114,10 @@ bool validate_options(const Options& options, std::string& error) {
     }
     if (options.keep_c && options.command != Command::Build) {
         error = "--keep-c applies to 'build'";
+        return false;
+    }
+    if (options.allow_kernel && !command_needs_input(options.command)) {
+        error = "--allow-kernel needs a source or a bytecode image to gate";
         return false;
     }
     if (options.native && (options.dump_tokens || options.dump_ast)) {

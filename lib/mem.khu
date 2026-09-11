@@ -34,9 +34,11 @@
 //     `Array<T>` is what a program should reach for first. A null pointer still
 //     traps.
 //   - **A foreign pointer.** A pointer this runtime did not allocate has no
-//     header to read, so nothing can be checked about it. Today `alloc` is the
-//     only thing that produces a `*byte`, so this cannot arise from Khudra
-//     source; the operations say so by trapping rather than proceeding blind.
+//     header to read, so nothing can be checked about it. `alloc` is the only
+//     thing that produces a `*byte` to Khudra source, except the kernel tier's
+//     `khuAdvKernel.fromAddress`, which manufactures one from a raw address
+//     behind the `--allow-kernel` gate; the operations say so by trapping
+//     rather than proceeding blind.
 //
 // ## Indexing
 //

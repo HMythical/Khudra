@@ -68,6 +68,18 @@ int execute_native(const khu::bytecode::Module& module, const Options& options) 
         case khu::native::NativeStatus::Ok:
             return exit_code;
         case khu::native::NativeStatus::NoCompiler:
+            if (module.has_inline()) {
+                // There is nothing to fall back to: an inline block is raw C
+                // or asm and only the native backend can run it
+                // (docs/spec.md, section 5.1).
+                std::fprintf(stderr,
+                             "khudra: %s: this image contains inline blocks "
+                             "(inline_c / inline_asm), which are native-only, "
+                             "but no host C compiler (cc, clang or gcc) was "
+                             "found\n",
+                             options.input.c_str());
+                return 1;
+            }
             std::fprintf(stderr,
                          "khudra: %s: no host C compiler (cc, clang or gcc) was found, so "
                          "--native falls back to the bytecode VM\n",
@@ -117,6 +129,18 @@ int run_stage(const Options& options) {
                 std::fprintf(stderr, "khudra: %s: %s\n", options.input.c_str(), error.c_str());
                 return 1;
             }
+            // The capability is carried in the bytecode, so a .kbc handed to
+            // someone else cannot silently exercise it: run and build re-ask
+            // for the grant the way the checker did at compile time
+            // (PLAN.md, section 9.5).
+            if (module.has_kernel() && !options.allow_kernel &&
+                options.command != Command::Disasm) {
+                std::fprintf(stderr,
+                             "khudra: %s: this image makes direct kernel calls, which this "
+                             "run did not allow; run or build it with --allow-kernel\n",
+                             options.input.c_str());
+                return 1;
+            }
             if (options.command == Command::Build) return build_native(module, options);
             if (options.command == Command::Run) {
                 return options.native ? execute_native(module, options) : execute(module, options);
@@ -128,6 +152,7 @@ int run_stage(const Options& options) {
     }
 
     khu::Compiler compiler;
+    compiler.set_allow_kernel(options.allow_kernel);
 
     std::string load_error;
     std::uint32_t file_id = compiler.add_file(options.input, load_error);

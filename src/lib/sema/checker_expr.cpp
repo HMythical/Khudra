@@ -580,6 +580,26 @@ const Type* Checker::check_call(ast::CallExpr& expr, const Type* expected) {
 
         if (ClassSymbol* space = namespace_receiver(member->object)) {
             info.namespace_ref = space;
+            // The kernel tier's gate. It lives here -- next to the only place
+            // a namespace call is recognized -- because a program that talks
+            // to the kernel directly is not portable and nothing in the
+            // runtime checks what it asks for. The kernel library's own bodies
+            // are guarded by the same test `lookup_class` uses: a stdlib body
+            // may call a per-OS member, user code may not (PLAN.md, 9.4).
+            if (is_kernel_namespace(space->name) && !allow_kernel_ &&
+                !(current_class_ && current_class_->from_stdlib)) {
+                auto builder = diagnostics_.error(
+                    member->name_loc, "'" + std::string(space->name) + "." +
+                                          std::string(member->name) +
+                                          "' is a direct kernel call, which this build did not "
+                                          "allow");
+                builder.note(member->name_loc,
+                             "compile or run it with --allow-kernel; a program that talks to "
+                             "the kernel directly is not portable and nothing in the runtime "
+                             "checks what it asks for");
+                for (ast::Expr* argument : expr.args) check_expr(argument);
+                return types_.error();
+            }
             if (space->name == kMathNamespace && member->name == "convertTo") {
                 return check_convert_intrinsic(expr);
             }

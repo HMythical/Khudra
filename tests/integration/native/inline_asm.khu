@@ -1,0 +1,25 @@
+// inline_asm splices raw assembly into the native backend's lowered method as
+// the guts of a GCC/Clang `__asm__ volatile(...)` statement (docs/spec.md,
+// section 5.2). It is volatile side-effect-only by design -- the block below
+// is a plain `nop` sitting between ordinary statements, which is the portable
+// shape every toolchain understands. Extended-asm writes through the aliased
+// locals are exercised in tests/unit/test_native.cpp. The bytecode VM cannot
+// run assembly -- this program traps there, exactly like inline_c.
+bring khu::stdlib;
+
+public class InlineAsm {
+    func through(int32 value) -> int32 {
+        int32 keep = value;
+        inline_asm { "nop" }
+        return keep;
+    }
+
+    func main() {
+        int32 first = 5;
+        int32 second = 6;
+        inline_asm { "nop" }
+        io.printLine(first);
+        io.printLine(second);
+        io.printLine(this.through(second));
+    }
+}

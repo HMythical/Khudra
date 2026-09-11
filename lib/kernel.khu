@@ -1,0 +1,99 @@
+// khuAdvKernel -- direct access to the operating system's kernel interface.
+//
+// khuStdSystem is the inverse of this library by design: it hides the
+// operating system, so every member behaves identically on Linux and on
+// Windows (lib/system.khu, "Portable, not POSIX"). This namespace exists to
+// expose what khuStdSystem hides. The per-OS namespaces -- khuAdvKernelLinux,
+// khuAdvKernelWindows and khuAdvKernelMac -- are where the actual syscalls
+// live; what the three hosts genuinely share, they share here.
+//
+// ## The trust model -- two layers
+//
+// A program may not talk to the kernel at all unless it was compiled or run
+// with `--allow-kernel`, and then every call that touches a buffer is checked
+// against the length this runtime knows (PLAN.md, section 5). The one thing
+// that is not checked is the raw `invoke` tier, because it cannot be: its
+// arguments are untyped machine words, and the runtime has no way to know
+// which of them are pointers. That is what *raw* means, and it is why the
+// compiler flag is the primary gate rather than the only one.
+//
+// A wrong-OS call is a fatal trap, not a sentinel: this library answers -1 to
+// a syscall that genuinely failed, so an errno-style report would let a
+// program that calls Windows APIs on Linux keep running while looking like it
+// merely got EPERM -- inverting the property this library exists to provide.
+//
+// ## What is here and what is not
+//
+// `platform()`, `linux()`, `windows()` and `mac()` are the branch a program
+// uses to pick its host's namespace; they are the one thing here that is
+// portable on purpose, so the same source can be written once and guarded at
+// run time. `errno()` and `errorMessage(code)` read back the shared per-process
+// error slot, exactly the way khuStdSystem's do, so the two libraries never
+// drift. `toAddress` and `fromAddress` are the buffer/address bridge a raw
+// syscall tier needs: Khudra has no implicit conversion, and a syscall
+// argument is an address, not a pointer with an extent.
+//
+// Windows gets no raw tier in v1. The honest raw gate there is resolving a
+// symbol out of ntdll or kernel32 over GetProcAddress, which is an FFI, and
+// FFI is reserved as its own roadmap item with its own seam. Until that lands,
+// khuAdvKernelWindows is curated Win32 only (docs/roadmap.md, the FFI item).
+public namespace khuAdvKernel {
+
+    // The host this build runs on. One of `linux()`, `windows()` or `mac()`,
+    // so the branch idiom `platform() == khuAdvKernel.linux()` reads the same
+    // on every host -- which is what makes a multi-host program *possible*:
+    // the per-OS namespaces trap on the wrong host, so the branch has to
+    // exist. The numbers are internal and stable; compare against the
+    // constants this namespace provides, never against the literal.
+    native func platform() -> int32;
+
+    // The constant for "this is Linux". 1.
+    native func linux() -> int32;
+    // The constant for "this is Windows". 2.
+    native func windows() -> int32;
+    // The constant for "this is macOS". 3.
+    native func mac() -> int32;
+
+    // "linux", "windows" or "mac" -- the readable form of `platform()`, for a
+    // banner or a whoami program. Like everything platform-shaped, it is text
+    // to print, not to compare.
+    native func platformName() -> string;
+
+    // The code the last failing kernel call left behind, or 0. It is the
+    // operating system's own number -- C `errno` on POSIX, the Win32 code on
+    // Windows -- so its value is not portable and must never appear in a
+    // golden test. `errorMessage` turns it into something a person can read.
+    native func errno() -> int64;
+
+    // The readable form of a code from `errno()`. Text, and therefore also
+    // platform-specific: print it, do not compare it.
+    native func errorMessage(int64 code) -> string;
+
+    // The address of `buffer`, as a signed machine word. Syscalls take `long`
+    // arguments, which is what an address is at that boundary; the signedness
+    // is deliberate, and it is the whole reason this is not called `addressOf`
+    // -- khuStdMem.addressOf already answers a `uint64`, and two `addressOf`s
+    // at different widths is exactly the near-miss that produces a convertTo
+    // no reader can justify.
+    native func toAddress(*byte buffer) -> int64;
+
+    // The inverse of `toAddress`: an address plus a length, answered as a
+    // `*byte`. The length is the caller's *assertion*, not a fact -- a bare
+    // address carries no extent, and an unchecked pointer is the one thing
+    // this library must not hand out silently. Every checked operation
+    // (khuStdMem.copy, fill, zero, compare; the kernel's own read and write)
+    // is then checked against it, exactly as if this runtime had allocated the
+    // block. The assertion cannot be stronger than the truth, but it does
+    // convert the common bug -- a count larger than the buffer actually
+    // behind the address -- from silent corruption into a trap. Address 0
+    // answers null, consistent with khuStdMem.isNull; a length <= 0 traps;
+    // and an address+length that wraps traps.
+    native func fromAddress(int64 address, int64 length) -> *byte;
+
+    // Forgets the extent `fromAddress` asserted for `region`. The pointer
+    // stays valid and still works for unchecked `[]` indexing; it stops being
+    // checkable, so the checked byte operations fall back to their usual
+    // "this runtime did not allocate it" trap. The reverse direction -- making
+    // an address checkable again -- is always `fromAddress`.
+    native func dropAddress(*byte region);
+}

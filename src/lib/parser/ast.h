@@ -258,6 +258,8 @@ enum class StmtKind : std::uint8_t {
     While,
     Free,
     Empty,  // a stray ';'
+    InlineC,
+    InlineAsm,
 };
 
 struct Stmt {
@@ -333,6 +335,29 @@ struct FreeStmt : Stmt {
 struct EmptyStmt : Stmt {
     static constexpr StmtKind kKind = StmtKind::Empty;
     explicit EmptyStmt(SourceLocation loc) : Stmt(kKind, loc) {}
+};
+
+// A raw C block spliced verbatim into the native translation unit
+// (docs/spec.md, Inline blocks). Only the native backend executes it; the VM
+// traps. `text` is the full source span including the braces, so the pretty
+// printer can round-trip it exactly; `body` is the C text between them.
+struct InlineCStmt : Stmt {
+    static constexpr StmtKind kKind = StmtKind::InlineC;
+    std::string_view text;
+    std::string_view body;
+    InlineCStmt(SourceLocation loc, std::string_view full, std::string_view inner)
+        : Stmt(kKind, loc), text(full), body(inner) {}
+};
+
+// inline_asm { ... }: the same shape as InlineCStmt, with the raw text lowered
+// as the guts of a GCC/Clang `__asm__ volatile(...)` statement instead of
+// straight-line C.
+struct InlineAsmStmt : Stmt {
+    static constexpr StmtKind kKind = StmtKind::InlineAsm;
+    std::string_view text;
+    std::string_view body;
+    InlineAsmStmt(SourceLocation loc, std::string_view full, std::string_view inner)
+        : Stmt(kKind, loc), text(full), body(inner) {}
 };
 
 // ---------------------------------------------------------------------------

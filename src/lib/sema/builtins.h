@@ -75,6 +75,15 @@ constexpr const char* kTimeNamespace = "khuStdTime";
 // sockets. Distinct from kMemNamespace the way khuStdErr is distinct from
 // khuErrors -- a handle is an OS object, a buffer is bytes.
 constexpr const char* kSystemNamespace = "khuStdSystem";
+// The kernel tier: what a program reaches for when it wants a syscall, the
+// inverse of khuStdSystem. The shared namespace carries the platform branch,
+// the error slot and the buffer/address bridge; the per-OS namespaces carry
+// the syscalls and trap when called from the wrong host. `is_kernel_namespace`
+// recognizes all four, which is what lets the checker gate every one of them.
+constexpr const char* kKernelNamespace = "khuAdvKernel";
+constexpr const char* kKernelLinuxNamespace = "khuAdvKernelLinux";
+constexpr const char* kKernelWindowsNamespace = "khuAdvKernelWindows";
+constexpr const char* kKernelMacNamespace = "khuAdvKernelMac";
 
 // The one member whose first argument is a type, so it cannot be declared in
 // Khudra and stays a compiler intrinsic.
@@ -94,6 +103,13 @@ NativeBinding bind_random(std::string_view member_name, std::size_t arity);
 NativeBinding bind_time(std::string_view member_name, std::size_t arity);
 NativeBinding bind_system(std::string_view member_name, std::size_t arity);
 NativeBinding bind_runtime(std::string_view member_name, std::size_t arity);
+// The shared khuAdvKernel namespace. The per-OS tiers bind in later phases,
+// one function per namespace, exactly the way the rest of the table grows.
+NativeBinding bind_kernel(std::string_view member_name, std::size_t arity);
+// Whether `namespace_name` is one of the kernel tier's namespaces. The checker
+// uses it as the compile-time half of the trust model: a namespace the program
+// is allowed to reach is `allow_kernel`, every kernel namespace is gated on it.
+bool is_kernel_namespace(std::string_view namespace_name);
 
 }  // namespace khu::sema
 

@@ -6,6 +6,7 @@
 #include "bytecode/disassembler.h"
 #include "bytecode/module.h"
 #include "bytecode/opcode.h"
+#include "compiler.h"
 
 using namespace khu::bytecode;
 
@@ -16,6 +17,8 @@ KHU_TEST(opcodes, sizes_match_their_operand_formats) {
     KHU_CHECK_EQ(instruction_size(Op::Convert), static_cast<std::uint32_t>(3));
     KHU_CHECK_EQ(instruction_size(Op::Jump), static_cast<std::uint32_t>(5));
     KHU_CHECK_EQ(instruction_size(Op::Materialize), static_cast<std::uint32_t>(4));
+    KHU_CHECK_EQ(instruction_size(Op::InlineC), static_cast<std::uint32_t>(3));
+    KHU_CHECK_EQ(instruction_size(Op::InlineAsm), static_cast<std::uint32_t>(3));
 
     // Every opcode has a mnemonic; nothing falls through the table.
     for (std::size_t i = 0; i < static_cast<std::size_t>(Op::Count); ++i) {
@@ -172,7 +175,7 @@ KHU_TEST(disassembler, renders_a_readable_listing) {
     Module module = build_sample_module();
     std::string text = disassemble(module);
 
-    KHU_CHECK_CONTAINS(text, "; Khudra bytecode v1.2  source=sample.khu");
+    KHU_CHECK_CONTAINS(text, "; Khudra bytecode v1.3  source=sample.khu");
     KHU_CHECK_CONTAINS(text, "class #0  Sample  strategy=manual  size=12");
     KHU_CHECK_CONTAINS(text, "public  int32 value  @0  raw");
     KHU_CHECK_CONTAINS(text, "private ref next  @4  manual-ref");
@@ -203,4 +206,106 @@ KHU_TEST(disassembler, annotates_jumps_and_materialize) {
     KHU_CHECK_CONTAINS(text, "jmp");
     KHU_CHECK_CONTAINS(text, "-> 5");
     KHU_CHECK_CONTAINS(text, "materialize     0, manual    ; J");
+}
+
+KHU_TEST(kbc, round_trips_inline_flags_and_locals_table) {
+    khu::Compiler compiler;
+    std::uint32_t file = compiler.add_buffer(
+        "i.khu",
+        "public class I {\n"
+        "    func go(int32 seed) {\n"
+        "        int32 x = 0;\n"
+        "        inline_c {\n"
+        "            x = seed->v.as_int;\n"
+        "        }\n"
+        "        io.printLine(x);\n"
+        "    }\n"
+        "}\n");
+    Module original;
+    KHU_CHECK(compiler.compile(file, original));
+    KHU_CHECK(original.has_inline());
+
+    // The method that holds the block carries its inline flag and a name chain
+    // for every named frame slot (parameters first, then locals).
+    bool found = false;
+    std::uint32_t go_locals_0 = 0xffffffffu;
+    std::uint32_t go_locals_1 = 0xffffffffu;
+    for (const MethodEntry& method : original.methods) {
+        if (original.string_at(method.name) != "go") continue;
+        found = true;
+        KHU_CHECK(method.has_inline());
+        KHU_CHECK(method.locals.size() >= static_cast<std::size_t>(2));
+        KHU_CHECK_NE(method.locals[0], static_cast<std::uint32_t>(0xffffffffu));  // seed
+        KHU_CHECK_NE(method.locals[1], static_cast<std::uint32_t>(0xffffffffu));  // x
+        go_locals_0 = method.locals[0];
+        go_locals_1 = method.locals[1];
+    }
+    KHU_CHECK(found);
+
+    // Serialization carries both: the module flags word and each method's
+    // locals table survive a round trip.
+    std::string bytes = serialize(original);
+    Module reloaded;
+    std::string error;
+    KHU_CHECK(deserialize(bytes, reloaded, error));
+    KHU_CHECK_EQ(error, std::string(""));
+    KHU_CHECK(reloaded.has_inline());
+    found = false;
+    for (const MethodEntry& method : reloaded.methods) {
+        if (reloaded.string_at(method.name) != "go") continue;
+        found = true;
+        KHU_CHECK(method.has_inline());
+        KHU_CHECK(method.locals.size() >= static_cast<std::size_t>(2));
+        KHU_CHECK_EQ(method.locals[0], go_locals_0);
+        KHU_CHECK_EQ(method.locals[1], go_locals_1);
+    }
+    KHU_CHECK(found);
+    KHU_CHECK_EQ(serialize(reloaded), bytes);
+}
+
+namespace {
+
+void put_u16_le(std::string& out, std::uint16_t value) {
+    out.push_back(static_cast<char>(value & 0xff));
+    out.push_back(static_cast<char>((value >> 8) & 0xff));
+}
+
+void put_u32_le(std::string& out, std::uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        out.push_back(static_cast<char>((value >> (i * 8)) & 0xff));
+    }
+}
+
+void put_i32_le(std::string& out, std::int32_t value) {
+    put_u32_le(out, static_cast<std::uint32_t>(value));
+}
+
+// A small, well-formed bytecode image in the 1.2 layout: no module flags word
+// and no per-method locals table, exactly what a release before 1.3 emitted.
+std::string sample_1_2_image() {
+    std::string bytes;
+    bytes.append(kMagic, 4);
+    put_u16_le(bytes, kVersionMajor);
+    put_u16_le(bytes, 2);
+    put_u32_le(bytes, 0);   // source_file
+    put_i32_le(bytes, -1);  // entry: none
+    put_i32_le(bytes, 0);   // root_class
+    put_u32_le(bytes, 0);   // no constants
+    put_u32_le(bytes, 0);   // no classes
+    put_u32_le(bytes, 0);   // no methods
+    return bytes;
+}
+
+}  // namespace
+
+KHU_TEST(kbc, a_1_2_image_loads_without_the_new_fields) {
+    std::string bytes = sample_1_2_image();
+
+    Module reloaded;
+    std::string error;
+    KHU_CHECK(deserialize(bytes, reloaded, error));
+    KHU_CHECK_EQ(error, std::string(""));
+    // The 1.3-only fields simply read as absent for an older image.
+    KHU_CHECK(!reloaded.has_inline());
+    KHU_CHECK_EQ(reloaded.methods.size(), static_cast<std::size_t>(0));
 }

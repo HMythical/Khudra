@@ -1,0 +1,7 @@
+bring khu::stdlib;
+
+public class KernelNotAllowed {
+    func main() {
+        io.printLine(khuAdvKernel.platform());
+    }
+}

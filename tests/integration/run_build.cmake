@@ -2,20 +2,28 @@
 #
 #   cmake -DKHUDRA=<path> -DSOURCE=<file.khu> -DEXPECTED=<file.expected>
 #         [-DEXPECTED_ERR=<file.expected-err>] -DOUTPUT=<binary>
-#         -P run_build.cmake
+#         [-DFLAGS="..."] -P run_build.cmake
 #
 # This is the ahead-of-time proof: the artifact is a program in its own right,
 # so it is executed directly, with no toolchain in the picture, and has to match
 # the same golden the interpreter matches.
+# FLAGS holds toolchain flags to insert before the source -- `--allow-kernel`
+# for the kernel goldens (PLAN.md, section 9.6).
 if(NOT DEFINED KHUDRA OR NOT DEFINED SOURCE OR NOT DEFINED EXPECTED OR NOT DEFINED OUTPUT)
     message(FATAL_ERROR "run_build.cmake needs KHUDRA, SOURCE, EXPECTED and OUTPUT")
 endif()
+
+if(NOT DEFINED FLAGS)
+    set(FLAGS "")
+endif()
+
+separate_arguments(flags_list UNIX_COMMAND "${FLAGS}")
 
 get_filename_component(output_dir "${OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_dir}")
 
 execute_process(
-    COMMAND "${KHUDRA}" build "${SOURCE}" -o "${OUTPUT}"
+    COMMAND "${KHUDRA}" build ${flags_list} "${SOURCE}" -o "${OUTPUT}"
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_errors
     RESULT_VARIABLE build_code

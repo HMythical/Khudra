@@ -104,6 +104,41 @@ KHU_TEST(cli, keep_c_is_rejected_outside_build) {
     KHU_CHECK_CONTAINS(error, "--keep-c applies to 'build'");
 }
 
+// The kernel tier is opt-in at the toolchain boundary: off by default, on
+// exactly when asked, and position does not matter (PLAN.md, section 9.4).
+KHU_TEST(cli, allow_kernel_defaults_off_and_parses) {
+    // Each call is a fresh command line, the way main() sees one: parse fills
+    // the same Options struct, so a second call on the same struct would
+    // inherit the first one's input.
+    {
+        Options options;
+        std::string error;
+        KHU_CHECK(parse({"khudra", "run", "a.khu"}, options, error));
+        KHU_CHECK_EQ(options.allow_kernel, false);
+    }
+    {
+        Options options;
+        std::string error;
+        KHU_CHECK(parse({"khudra", "run", "--allow-kernel", "a.khu"}, options, error));
+        KHU_CHECK_EQ(options.allow_kernel, true);
+    }
+    {
+        Options options;
+        std::string error;
+        KHU_CHECK(parse({"khudra", "compile", "a.khu", "--allow-kernel"}, options, error));
+        KHU_CHECK_EQ(options.allow_kernel, true);
+    }
+}
+
+KHU_TEST(cli, allow_kernel_is_rejected_where_it_means_nothing) {
+    for (const char* command : {"version", "help"}) {
+        Options options;
+        std::string error;
+        KHU_CHECK(!parse({"khudra", command, "--allow-kernel"}, options, error));
+        KHU_CHECK_CONTAINS(error, "--allow-kernel");
+    }
+}
+
 KHU_TEST(cli, native_does_not_mix_with_the_dumps) {
     Options options;
     std::string error;

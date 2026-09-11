@@ -235,3 +235,39 @@ KHU_TEST(pretty_printer, preserves_type_alias_spelling) {
     KHU_CHECK_CONTAINS(text, "public byte d = 0;");
     KHU_CHECK_CONTAINS(text, "private *byte raw = null;");
 }
+
+KHU_TEST(pretty_printer, prints_inline_c_verbatim_and_round_trips) {
+    RoundTrip result = round_trip(
+        "public class A {\n"
+        "    func go() {\n"
+        "        int32 x = 0;\n"
+        "        inline_c {\n"
+        "            x = 1;\n"
+        "        }\n"
+        "        io.printLine(x);\n"
+        "    }\n"
+        "}\n");
+    KHU_CHECK(result.parsed_cleanly);
+    KHU_CHECK(result.reparsed_cleanly);
+    KHU_CHECK(result.tree_equal);
+    KHU_CHECK(result.text_stable);
+    // The raw C text is printed exactly as written, braces and all.
+    KHU_CHECK_CONTAINS(result.first, "inline_c {\n            x = 1;\n        }");
+}
+
+KHU_TEST(pretty_printer, prints_inline_asm_verbatim_and_round_trips) {
+    RoundTrip result = round_trip(
+        "public class A {\n"
+        "    func go() {\n"
+        "        inline_asm {\n"
+        "            \"nop\"\n"
+        "        }\n"
+        "        inline_c { x = 1; }\n"
+        "    }\n"
+        "}\n");
+    KHU_CHECK(result.parsed_cleanly);
+    KHU_CHECK(result.reparsed_cleanly);
+    KHU_CHECK(result.tree_equal);
+    KHU_CHECK(result.text_stable);
+    KHU_CHECK_CONTAINS(result.first, "inline_asm {\n            \"nop\"\n        }");
+}

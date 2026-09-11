@@ -18,12 +18,14 @@ const char* member_kind_name(ast::MethodForm form) {
 
 }  // namespace
 
-Checker::Checker(TypeContext& types, diag::DiagnosticEngine& diagnostics, util::Arena& arena)
+Checker::Checker(TypeContext& types, diag::DiagnosticEngine& diagnostics, util::Arena& arena,
+                 bool allow_kernel)
     : types_(types),
       diagnostics_(diagnostics),
       arena_(arena),
       access_(diagnostics),
-      memory_(types, diagnostics) {}
+      memory_(types, diagnostics),
+      allow_kernel_(allow_kernel) {}
 
 ExprInfo& Checker::info_for(ast::Expr& expr) {
     if (!expr.info) expr.info = arena_.create<ExprInfo>();

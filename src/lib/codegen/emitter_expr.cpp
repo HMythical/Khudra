@@ -395,6 +395,11 @@ void Emitter::emit_call(const ast::CallExpr& call, bool discard) {
     }
 
     if (method->is_native) {
+        // A kernel native marks the module, so a .kbc carries the capability
+        // with it and a run without --allow-kernel refuses (PLAN.md, 9.5).
+        if (method->native_id >= bytecode::kNativeBlockKernel) {
+            module_->flags |= static_cast<std::uint32_t>(bytecode::kModuleUsesKernel);
+        }
         for (const ast::Expr* argument : call.args) emit_expr(argument);
         op_u16_u8(Op::CallNative, static_cast<std::uint16_t>(method->native_id),
                   static_cast<std::uint8_t>(call.args.size()));

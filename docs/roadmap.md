@@ -238,6 +238,19 @@ the counter that would trigger it.
 
 ## Interoperation
 
+### Inline blocks -- shipped (inline_c and inline_asm)
+
+**Seam:** the `inline_c { ... }` / `inline_asm { ... }` statements, lowered by
+`src/native/cemit/`.
+
+Raw C text, and raw assembly, with direct access to the enclosing method's
+frame through named `KhuValue* const` aliases. They are the source-level cousin
+of the FFI: same trust boundary, no symbol table. `inline_c` splices ordinary C
+into the emitted translation unit; `inline_asm` wraps its text in a
+`__asm__ volatile(...)` statement, so it is volatile side-effect-only by
+construction and restricted to pass-by-bytecode effects on the same aliased
+locals.
+
 ### FFI with C libraries
 
 **Seam:** `utils/proc_engine.h`, and `bytecode::NativeId`.
@@ -252,6 +265,11 @@ An FFI needs:
 - a rule for what a foreign function may do with a reference. `*byte` is already
   a raw, never-traced slot, and pinning already exists for handing manual memory
   to something outside the collector.
+
+The kernel tier (`khuAdvKernel*`) is the first deliberate instance of this seam:
+fixed native ids instead of a symbol table, and the same trust boundary made
+explicit with the `--allow-kernel` gate, defaulting off because a program that
+talks to the kernel is not portable.
 
 ---
 

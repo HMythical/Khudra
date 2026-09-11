@@ -250,6 +250,9 @@ void Emitter::emit_method(sema::MethodSymbol& method) {
     CodeBuffer buffer;
     buffer_ = &buffer;
     current_return_ = method.return_type;
+    current_has_inline_ = false;
+    inline_name_slot_.clear();
+    for (sema::VarSymbol* param : method.params) record_inline_name(*param);
 
     if (method.decl && method.decl->body) emit_block(method.decl->body);
     // A void method may fall off the end; a value-returning one cannot, because
@@ -269,6 +272,7 @@ void Emitter::emit_method(sema::MethodSymbol& method) {
     entry.source_file = file_constant_for(method.loc);
     entry.code = std::move(buffer.code);
     entry.lines = std::move(buffer.lines);
+    finalize_inline_table(entry);
 
     buffer_ = nullptr;
     current_return_ = nullptr;
@@ -310,6 +314,9 @@ void Emitter::emit_procedures(sema::ProcedureSymbol& procedures) {
     CodeBuffer buffer;
     buffer_ = &buffer;
     current_return_ = nullptr;
+    current_has_inline_ = false;
+    inline_name_slot_.clear();
+    for (sema::VarSymbol* param : procedures.params) record_inline_name(*param);
 
     if (procedures.decl && procedures.decl->body) emit_block(procedures.decl->body);
     mark(procedures.loc);
@@ -325,6 +332,7 @@ void Emitter::emit_procedures(sema::ProcedureSymbol& procedures) {
     entry.source_file = file_constant_for(procedures.loc);
     entry.code = std::move(buffer.code);
     entry.lines = std::move(buffer.lines);
+    finalize_inline_table(entry);
 
     buffer_ = nullptr;
 }
@@ -360,6 +368,7 @@ void Emitter::emit_stmt(const ast::Stmt* statement) {
                 emit_default_value(decl.symbol->type, decl.loc);
             }
             op_u16(Op::StoreLocal, static_cast<std::uint16_t>(decl.symbol->frame_index));
+            record_inline_name(*decl.symbol);
             break;
         }
 
@@ -422,7 +431,39 @@ void Emitter::emit_stmt(const ast::Stmt* statement) {
             op(Op::Free);
             break;
         }
+
+        case ast::StmtKind::InlineC: {
+            const auto& node = *static_cast<const ast::InlineCStmt*>(statement);
+            current_has_inline_ = true;
+            op_u16(Op::InlineC,
+                   static_cast<std::uint16_t>(module_->intern_string(node.body)));
+            break;
+        }
+
+        case ast::StmtKind::InlineAsm: {
+            const auto& node = *static_cast<const ast::InlineAsmStmt*>(statement);
+            current_has_inline_ = true;
+            op_u16(Op::InlineAsm,
+                   static_cast<std::uint16_t>(module_->intern_string(node.body)));
+            break;
+        }
     }
+}
+
+void Emitter::record_inline_name(const sema::VarSymbol& symbol) {
+    if (symbol.name.empty() || symbol.frame_index > 0xffff) return;
+    inline_name_slot_.insert_new(symbol.name, static_cast<std::uint16_t>(symbol.frame_index));
+}
+
+void Emitter::finalize_inline_table(bytecode::MethodEntry& entry) {
+    if (!current_has_inline_) return;
+    inline_locals_.resize(static_cast<std::size_t>(entry.frame_size), 0xffffffffu);
+    inline_name_slot_.for_each([this, &entry](std::string_view name, std::uint16_t slot) {
+        if (slot < entry.frame_size) inline_locals_[slot] = module_->intern_string(name);
+    });
+    entry.locals = std::move(inline_locals_);
+    entry.flags |= static_cast<std::uint32_t>(bytecode::kMethodHasInline);
+    module_->flags |= static_cast<std::uint32_t>(bytecode::kModuleHasInline);
 }
 
 void Emitter::emit_default_value(const sema::Type* type, diag::SourceLocation loc) {

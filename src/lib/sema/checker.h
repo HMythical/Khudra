@@ -44,7 +44,12 @@ struct ExprInfo {
 
 class Checker {
 public:
-    Checker(TypeContext& types, diag::DiagnosticEngine& diagnostics, util::Arena& arena);
+    // `allow_kernel` grants the khuAdvKernel* namespaces; without it a call
+    // into any one of them is a hard error (PLAN.md, section 9.4). The
+    // default keeps the toolchain's own entry points unchanged -- the Compiler
+    // is the only plain link from the CLI to here, and it sets it explicitly.
+    Checker(TypeContext& types, diag::DiagnosticEngine& diagnostics, util::Arena& arena,
+            bool allow_kernel = false);
 
     // Runs every pass over all `units`. `entry_unit` is the user's program --
     // the standard library units around it never supply an entry point.
@@ -153,6 +158,11 @@ private:
     AccessChecker access_;
     MemoryModel memory_;
     PinTracker pins_;
+
+    // Grants the khuAdvKernel* namespaces to every sweep this checker runs.
+    // Defaults false and only the Compiler sets it, so the gate is one line
+    // back from the CLI (PLAN.md, section 9.4).
+    bool allow_kernel_ = false;
 
     Program* program_ = nullptr;
     ClassSymbol* current_class_ = nullptr;

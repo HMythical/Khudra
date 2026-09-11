@@ -15,6 +15,7 @@
 #include "sema/checker.h"
 #include "sema/symbol.h"
 #include "util/array.h"
+#include "util/hashmap.h"
 
 namespace khu::codegen {
 
@@ -82,10 +83,21 @@ private:
     void emit_logical(const ast::BinaryExpr& binary);
     void emit_load_var(const sema::VarSymbol& var, const ast::Expr* object);
 
+    // --- inline blocks ---
+    // Records a name an inline block may reference, deduplicated by name (the
+    // first declaration wins, so a shadowed local aliases the outer slot).
+    void record_inline_name(const sema::VarSymbol& symbol);
+    // Moves the gathered names into MethodEntry::locals (slot -> pool index)
+    // and sets the has-inline flags, when the method emitted any InlineC.
+    void finalize_inline_table(bytecode::MethodEntry& entry);
+
     void error(diag::SourceLocation loc, std::string message);
 
     // Module index of each class's synthetic field initializer, or -1.
     util::Array<std::int32_t> field_init_indices_;
+    util::Array<std::uint32_t> inline_locals_;
+    util::StringMap<std::uint16_t> inline_name_slot_;
+    bool current_has_inline_ = false;
 
     sema::Program& program_;
     diag::DiagnosticEngine& diagnostics_;

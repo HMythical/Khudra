@@ -52,7 +52,16 @@ bool block_of(const std::string& qualified, std::uint32_t& first, std::uint32_t&
         {"khuStdMem.", khu::bytecode::kNativeBlockMem, khu::bytecode::kNativeBlockRandom - 1},
         {"khuStdRandom.", khu::bytecode::kNativeBlockRandom, khu::bytecode::kNativeBlockTime - 1},
         {"khuStdTime.", khu::bytecode::kNativeBlockTime, khu::bytecode::kNativeBlockSystem - 1},
-        {"khuStdSystem.", khu::bytecode::kNativeBlockSystem, khu::bytecode::kNativeBlockEnd - 1},
+        {"khuStdSystem.", khu::bytecode::kNativeBlockSystem,
+         khu::bytecode::kNativeBlockKernel - 1},
+        {"khuAdvKernelLinux.", khu::bytecode::kNativeBlockKernelLinux,
+         khu::bytecode::kNativeBlockKernelWindows - 1},
+        {"khuAdvKernelWindows.", khu::bytecode::kNativeBlockKernelWindows,
+         khu::bytecode::kNativeBlockKernelMac - 1},
+        {"khuAdvKernelMac.", khu::bytecode::kNativeBlockKernelMac,
+         khu::bytecode::kNativeBlockEnd - 1},
+        {"khuAdvKernel.", khu::bytecode::kNativeBlockKernel,
+         khu::bytecode::kNativeBlockKernelLinux - 1},
     };
     for (const Block& block : blocks) {
         if (qualified.rfind(block.prefix, 0) == 0) {

@@ -146,3 +146,55 @@ KHU_TEST(lexer, collects_multiple_errors_in_one_pass) {
     scan(compiler, "# @ $");
     KHU_CHECK_EQ(compiler.diagnostics().error_count(), static_cast<std::size_t>(3));
 }
+
+KHU_TEST(lexer, captures_inline_c_as_one_raw_block_token) {
+    Compiler compiler;
+    auto tokens = scan(compiler,
+                       "inline_c {\n"
+                       "    // a { inside a comment is not nesting\n"
+                       "    char* s = \"} and \\\" more \";\n"
+                       "    char c = '}';\n"
+                       "    /* } -- still inside the raw block */\n"
+                       "    if (s) { c = 'x'; }\n"
+                       "}\n");
+
+    KHU_CHECK(!compiler.diagnostics().has_errors());
+    KHU_CHECK(tokens[0].is(TokenKind::KwInlineC));
+    KHU_CHECK(tokens[1].is(TokenKind::RawBlock));
+    KHU_CHECK(tokens[2].is(TokenKind::EndOfFile));
+
+    // The token carries the whole brace-delimited C text, braces included.
+    std::string block(tokens[1].text);
+    KHU_CHECK_EQ(block.front(), '{');
+    KHU_CHECK_EQ(block.back(), '}');
+    KHU_CHECK_CONTAINS(block, "// a { inside a comment is not nesting");
+    KHU_CHECK_CONTAINS(block, "\"} and \\\" more \"");
+    KHU_CHECK_CONTAINS(block, "if (s) { c = 'x'; }");
+}
+
+KHU_TEST(lexer, reports_an_inline_block_that_never_closes) {
+    Compiler compiler;
+    scan(compiler, "int32 x = 0;\ninline_c { /* never closed");
+    KHU_CHECK(compiler.diagnostics().has_errors());
+    KHU_CHECK_CONTAINS(compiler.diagnostics().render(),
+                       "unterminated inline block: expected '}' to close it");
+}
+
+KHU_TEST(lexer, captures_inline_asm_as_one_raw_block_token) {
+    Compiler compiler;
+    auto tokens = scan(compiler,
+                       "inline_asm {\n"
+                       "    \"nop\"\n"
+                       "}\n");
+
+    KHU_CHECK(!compiler.diagnostics().has_errors());
+    KHU_CHECK(tokens[0].is(TokenKind::KwInlineAsm));
+    KHU_CHECK(tokens[1].is(TokenKind::RawBlock));
+    KHU_CHECK(tokens[2].is(TokenKind::EndOfFile));
+
+    // The token carries the whole brace-delimited asm text, braces included.
+    std::string block(tokens[1].text);
+    KHU_CHECK_EQ(block.front(), '{');
+    KHU_CHECK_EQ(block.back(), '}');
+    KHU_CHECK_CONTAINS(block, "\"nop\"");
+}

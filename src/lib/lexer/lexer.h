@@ -38,6 +38,7 @@ private:
     Token scan_identifier();
     Token scan_number();
     Token scan_string();
+    Token scan_raw_block(diag::SourceLocation start);
     Token make(TokenKind kind, diag::SourceLocation start, std::size_t start_offset);
 
     diag::DiagnosticEngine& diagnostics_;
@@ -47,6 +48,9 @@ private:
     std::size_t offset_ = 0;
     std::uint32_t line_ = 1;
     std::uint32_t column_ = 1;
+    // Set after `inline_c` is scanned so the next scan_token() takes the raw
+    // block instead of treating the `{` as statement block punctuation.
+    bool inline_block_pending_ = false;
 };
 
 }  // namespace khu::lexer

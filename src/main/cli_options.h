@@ -38,6 +38,10 @@ struct Options {
     bool native = false;
     // `build --keep-c`: leave the intermediate translation unit on disk.
     bool keep_c = false;
+    // The kernel tier is opt-in at the toolchain boundary, because a program
+    // that talks to the kernel directly is not portable and nothing in the
+    // runtime checks what it asks for (PLAN.md, section 9.4).
+    bool allow_kernel = false;
     // Everything after a `--`: the *program's* arguments, not khudra's.
     // `khuStdSystem.argc()`/`argv()` answer with these, and the separator is
     // what keeps a program's `--native` from being read as khudra's.

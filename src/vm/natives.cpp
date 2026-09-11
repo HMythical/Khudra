@@ -411,8 +411,11 @@ NativeOutcome write_bytes(NativeServices& services, const Value* argv, bool to_e
 // trapping rather than proceeding blind.
 
 // The pointer argument, with its block size. Fails when the value is not a
-// pointer, and reports whether the runtime knows how long it is.
-bool pointer_of(const Value& value, void*& out, std::size_t& size) {
+// pointer, and reports whether the runtime knows how long it is. A pointer the
+// manual allocator did not hand out is checked against the kernel region
+// registry before it gives up, so a checked operation gains a kernel region's
+// length even though the manual allocator never saw it (PLAN.md, section 5.2).
+bool pointer_of(NativeServices& services, const Value& value, void*& out, std::size_t& size) {
     if (value.is_null_reference()) {
         out = nullptr;
         size = 0;
@@ -421,14 +424,17 @@ bool pointer_of(const Value& value, void*& out, std::size_t& size) {
     if (value.tag != TypeTag::Ptr) return false;
     out = value.as_raw;
     size = khu_manual_block_size(out);
+    if (size == 0) {
+        size = static_cast<std::size_t>(services.kernel.extent_of(out));
+    }
     return true;
 }
 
 // Checks that [0, count) fits inside the block `pointer` names.
-NativeOutcome check_range(const char* what, const Value& value, std::int64_t count,
-                          void*& pointer) {
+NativeOutcome check_range(NativeServices& services, const char* what, const Value& value,
+                          std::int64_t count, void*& pointer) {
     std::size_t size = 0;
-    if (!pointer_of(value, pointer, size)) {
+    if (!pointer_of(services, value, pointer, size)) {
         return NativeOutcome::failed(std::string(what) + " expects a raw pointer, found " +
                                      std::string(bytecode::type_tag_name(value.tag)));
     }
@@ -545,17 +551,11 @@ std::string format_now(bool utc) {
 
 // A null `*byte`, which is what every failing constructor here answers.
 Value null_pointer() {
-    Value result;
-    result.tag = TypeTag::Ptr;
-    result.as_raw = nullptr;
-    return result;
+    return Value::null_pointer();
 }
 
 Value pointer_value(void* block) {
-    Value result;
-    result.tag = TypeTag::Ptr;
-    result.as_raw = block;
-    return result;
+    return Value::make_pointer(block);
 }
 
 // The open handle `value` names, or null when it names none -- because it is
@@ -1408,7 +1408,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
         case bytecode::NativeId::MemRealloc: {
             void* block = nullptr;
             std::size_t size = 0;
-            if (!pointer_of(argv[0], block, size)) {
+            if (!pointer_of(services, argv[0], block, size)) {
                 return NativeOutcome::failed("khuStdMem.realloc expects a raw pointer, found " +
                                              std::string(bytecode::type_tag_name(argv[0].tag)));
             }
@@ -1416,7 +1416,11 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             if (wanted < 0) {
                 return NativeOutcome::failed("khuStdMem.realloc was given a negative size");
             }
-            if (block && size == 0) {
+            // The region registry extends a kernel pointer's length, but this
+            // is the one operation that asks the *manual allocator* to move a
+            // block -- so "does the manual allocator know this pointer" is the
+            // question here, and the registry must not answer it.
+            if (block && khu_manual_block_size(block) == 0) {
                 return NativeOutcome::failed(
                     "khuStdMem.realloc on a buffer this runtime did not allocate");
             }
@@ -1433,14 +1437,16 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
         case bytecode::NativeId::MemFree: {
             void* block = nullptr;
             std::size_t size = 0;
-            if (!pointer_of(argv[0], block, size)) {
+            if (!pointer_of(services, argv[0], block, size)) {
                 return NativeOutcome::failed("khuStdMem.release expects a raw pointer, found " +
                                              std::string(bytecode::type_tag_name(argv[0].tag)));
             }
             // Releasing null is a no-op, the way it is in C. Releasing
             // something this runtime did not hand out is not: a double free
-            // would look exactly like it.
-            if (block && size == 0) {
+            // would look exactly like it. `khu_manual_block_size` is the
+            // manual allocator's own word, so a kernel region -- which only the
+            // region registry knows -- still reads as "did not allocate".
+            if (block && khu_manual_block_size(block) == 0) {
                 return NativeOutcome::failed(
                     "khuStdMem.release of a buffer this runtime did not allocate, or of one "
                     "that has already been released");
@@ -1456,9 +1462,9 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             std::int64_t count = argv[2].as_int;
             void* destination = nullptr;
             void* source = nullptr;
-            NativeOutcome checked = check_range(what, argv[0], count, destination);
+            NativeOutcome checked = check_range(services, what, argv[0], count, destination);
             if (!checked.ok) return checked;
-            checked = check_range(what, argv[1], count, source);
+            checked = check_range(services, what, argv[1], count, source);
             if (!checked.ok) return checked;
             if (count == 0 || !destination || !source) return NativeOutcome::nothing();
             if (overlapping) {
@@ -1485,7 +1491,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             const char* what = is_fill ? "khuStdMem.fill" : "khuStdMem.zero";
             std::int64_t count = is_fill ? argv[2].as_int : argv[1].as_int;
             void* block = nullptr;
-            NativeOutcome checked = check_range(what, argv[0], count, block);
+            NativeOutcome checked = check_range(services, what, argv[0], count, block);
             if (!checked.ok) return checked;
             if (count == 0 || !block) return NativeOutcome::nothing();
             int byte = is_fill ? static_cast<int>(argv[1].as_uint & 0xffu) : 0;
@@ -1497,9 +1503,9 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             std::int64_t count = argv[2].as_int;
             void* left = nullptr;
             void* right = nullptr;
-            NativeOutcome checked = check_range("khuStdMem.compare", argv[0], count, left);
+            NativeOutcome checked = check_range(services, "khuStdMem.compare", argv[0], count, left);
             if (!checked.ok) return checked;
-            checked = check_range("khuStdMem.compare", argv[1], count, right);
+            checked = check_range(services, "khuStdMem.compare", argv[1], count, right);
             if (!checked.ok) return checked;
             if (count == 0 || !left || !right) {
                 return NativeOutcome::produced(Value::make_int(TypeTag::Int32, 0));
@@ -1514,7 +1520,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
         case bytecode::NativeId::MemAddressOf: {
             void* block = nullptr;
             std::size_t size = 0;
-            if (!pointer_of(argv[0], block, size)) {
+            if (!pointer_of(services, argv[0], block, size)) {
                 return NativeOutcome::failed("khuStdMem.addressOf expects a raw pointer, found " +
                                              std::string(bytecode::type_tag_name(argv[0].tag)));
             }
@@ -1529,7 +1535,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             void* left = nullptr;
             void* right = nullptr;
             std::size_t ignored = 0;
-            if (!pointer_of(argv[0], left, ignored) || !pointer_of(argv[1], right, ignored)) {
+            if (!pointer_of(services, argv[0], left, ignored) || !pointer_of(services, argv[1], right, ignored)) {
                 return NativeOutcome::failed("khuStdMem.refEquals expects two raw pointers");
             }
             return NativeOutcome::produced(Value::make_bool(left == right));
@@ -1539,7 +1545,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             if (argv[0].tag == TypeTag::Ptr || argv[0].is_null_reference()) {
                 void* block = nullptr;
                 std::size_t size = 0;
-                pointer_of(argv[0], block, size);
+                pointer_of(services, argv[0], block, size);
                 return NativeOutcome::produced(
                     Value::make_int(TypeTag::Int32, static_cast<std::int64_t>(size)));
             }
@@ -1617,7 +1623,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             std::int64_t count = argv[1].as_int;
             void* block = nullptr;
             NativeOutcome checked =
-                check_range("khuStdRandom.nextBytes", argv[0], count, block);
+                check_range(services, "khuStdRandom.nextBytes", argv[0], count, block);
             if (!checked.ok) return checked;
             if (count == 0 || !block) return NativeOutcome::nothing();
             auto* bytes = static_cast<unsigned char*>(block);
@@ -1795,7 +1801,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             std::int64_t count = argv[2].as_int;
             void* block = nullptr;
             NativeOutcome checked =
-                check_range("khuStdSystem.writeBytes", argv[1], count, block);
+                check_range(services, "khuStdSystem.writeBytes", argv[1], count, block);
             if (!checked.ok) return checked;
             std::FILE* stream = file_of(services, argv[0]);
             if (!stream || count == 0 || !block) return NativeOutcome::nothing();
@@ -2033,7 +2039,7 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             const char* what = sending ? "khuStdSystem.send" : "khuStdSystem.recv";
             std::int64_t count = argv[2].as_int;
             void* block = nullptr;
-            NativeOutcome checked = check_range(what, argv[1], count, block);
+            NativeOutcome checked = check_range(services, what, argv[1], count, block);
             if (!checked.ok) return checked;
             platform::Socket socket = socket_of(services, argv[0], false);
             if (socket == platform::kInvalidSocket) {
@@ -2089,6 +2095,48 @@ NativeOutcome invoke_native(NativeServices& services, bytecode::NativeId id, con
             return NativeOutcome::produced(
                 Value::make_string(services.make_string(std::move(address))));
         }
+
+        // --- khuAdvKernel: the shared half of the kernel tier ----------------
+        //
+        // The platform branch, the shared error slot, and the buffer/address
+        // bridge. Each arm is a one-line delegation: the syscalls themselves
+        // live in the per-OS namespaces, and nothing here depends on which OS
+        // is underneath (lib/kernel.khu).
+        case bytecode::NativeId::KernelPlatform:
+            return NativeOutcome::produced(
+                Value::make_int(TypeTag::Int32, kernel::platform()));
+
+        case bytecode::NativeId::KernelPlatformLinux:
+            return NativeOutcome::produced(Value::make_int(TypeTag::Int32, 1));
+
+        case bytecode::NativeId::KernelPlatformWindows:
+            return NativeOutcome::produced(Value::make_int(TypeTag::Int32, 2));
+
+        case bytecode::NativeId::KernelPlatformMac:
+            return NativeOutcome::produced(Value::make_int(TypeTag::Int32, 3));
+
+        case bytecode::NativeId::KernelPlatformName:
+            return NativeOutcome::produced(
+                Value::make_string(services.make_string(kernel::platform_name())));
+
+        case bytecode::NativeId::KernelErrno:
+            // One per-process slot shared with khuStdSystem: a syscall's C
+            // `errno` lands in the same place the file/socket layers record
+            // theirs, so the two libraries cannot drift (PLAN.md, section 6.1).
+            return NativeOutcome::produced(Value::make_int(TypeTag::Int64, platform::last_error()));
+
+        case bytecode::NativeId::KernelErrorMessage:
+            return NativeOutcome::produced(Value::make_string(
+                services.make_string(platform::error_message(static_cast<int>(argv[0].as_int)))));
+
+        case bytecode::NativeId::KernelToAddress:
+            return kernel::to_address(argv[0]);
+
+        case bytecode::NativeId::KernelFromAddress:
+            return kernel::from_address(argv[0], argv[1], services);
+
+        case bytecode::NativeId::KernelDropAddress:
+            return kernel::drop_address(argv[0], services);
 
         case bytecode::NativeId::None:
             break;
